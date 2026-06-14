@@ -20,7 +20,8 @@ const PORT = parseInt(process.env.PORT_POOL || '3001');
 const BLOCK_THRESHOLD = parseInt(process.env.BLOCK_THRESHOLD || '10');
 const DIFFICULTY = process.env.DIFFICULTY || '0000';
 const COORDINATOR_URL = process.env.COORDINATOR_URL || 'http://coordinator:3000';
-const HMAC_SECRET = process.env.HMAC_SECRET || 'change-me-in-production';
+const HMAC_SECRET = process.env.HMAC_SECRET;
+if (!HMAC_SECRET) throw new Error('HMAC_SECRET environment variable is required');
 const WORKER_TTL_MS = parseInt(process.env.WORKER_TTL_MS || '30000');
 const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672';
 
@@ -67,7 +68,11 @@ async function triggerMining(transactions) {
     // Coordinator unavailable — use genesis prevHash
   }
 
-  const workerCount = Math.max(1, registry.count());
+  const activeWorkers = registry.count();
+  const workerCount = Math.max(1, activeWorkers);
+  const effectiveDifficulty = activeWorkers === 0
+    ? DIFFICULTY.slice(0, Math.max(1, DIFFICULTY.length - 1))
+    : DIFFICULTY;
   const ranges = split(workerCount);
   const payload = buildPayload(transactions, prevHash);
 
@@ -76,7 +81,7 @@ async function triggerMining(transactions) {
       task_id: uuidv4(),
       payload,
       prev_hash: prevHash,
-      difficulty: DIFFICULTY,
+      difficulty: effectiveDifficulty,
       nonce_start: range.start,
       nonce_end: range.end,
       transactions,
@@ -119,7 +124,7 @@ app.post('/transaction', async (req, res) => {
     }
   }
 
-  return res.status(202).json({ accepted: true, pending: pool.size() });
+  return res.status(201).json({ accepted: true, pending: pool.size() });
 });
 
 /**
