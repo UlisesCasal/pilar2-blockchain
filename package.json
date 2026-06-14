@@ -5,9 +5,9 @@
   "main": "entrypoint.js",
   "scripts": {
     "start": "node entrypoint.js",
-    "test": "jest",
+    "test": "jest --selectProjects unit",
     "test:unit": "jest --selectProjects unit",
-    "test:integration": "jest --selectProjects integration",
+    "test:integration": "INTEGRATION=true jest --selectProjects integration",
     "test:watch": "jest --watch"
   },
   "dependencies": {

@@ -1,0 +1,101 @@
+version: '3.8'
+
+networks:
+  blockchain:
+    driver: bridge
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - blockchain
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    networks:
+      - blockchain
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  validator:
+    build: .
+    environment:
+      SERVICE: validator
+      HMAC_SECRET: ${HMAC_SECRET}
+      PORT_VALIDATOR: 3003
+    ports:
+      - "3003:3003"
+    networks:
+      - blockchain
+
+  coordinator:
+    build: .
+    environment:
+      SERVICE: coordinator
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      REDIS_URL: redis://redis:6379
+      HMAC_SECRET: ${HMAC_SECRET}
+      DIFFICULTY: ${DIFFICULTY:-0000}
+      POOL_URL: http://pool:3001
+      PORT_COORDINATOR: 3000
+    ports:
+      - "3000:3000"
+    networks:
+      - blockchain
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  pool:
+    build: .
+    environment:
+      SERVICE: pool
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HMAC_SECRET: ${HMAC_SECRET}
+      BLOCK_THRESHOLD: ${BLOCK_THRESHOLD:-10}
+      COORDINATOR_URL: http://coordinator:3000
+      WORKER_TTL_MS: 30000
+      PORT_POOL: 3001
+    ports:
+      - "3001:3001"
+    networks:
+      - blockchain
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      coordinator:
+        condition: service_started
+
+  worker:
+    build: .
+    environment:
+      SERVICE: worker
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HMAC_SECRET: ${HMAC_SECRET}
+      PILAR1_CPU_BINARY: ./tpi/pilar1/Hit7/CPU/pow_cpu_range.js
+      WORKER_TYPE: CPU
+      KEEPALIVE_INTERVAL_MS: 10000
+      PORT_WORKER: 3002
+    networks:
+      - blockchain
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    deploy:
+      replicas: 2
