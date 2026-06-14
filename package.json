@@ -1,0 +1,25 @@
+{
+  "name": "pilar2-blockchain",
+  "version": "1.0.0",
+  "description": "Distributed PoW Blockchain Infrastructure — Pilar 2",
+  "main": "entrypoint.js",
+  "scripts": {
+    "start": "node entrypoint.js",
+    "test": "jest",
+    "test:unit": "jest --selectProjects unit",
+    "test:integration": "jest --selectProjects integration",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.3.2",
+    "md5": "^2.3.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  }
+}
