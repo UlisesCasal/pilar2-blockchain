@@ -11,8 +11,21 @@ const { verify } = require('../shared/hmac');
  *   Defaults to process.env.HMAC_SECRET or 'change-me-in-production'
  * @returns {{ valid: boolean, errors: string[] }}
  */
+function buildFirmaPayload(tx) {
+  return JSON.stringify({
+    id: tx.id,
+    id_lote: tx.id_lote,
+    origen: tx.origen,
+    destino: tx.destino,
+    cantidad: tx.cantidad,
+    tipo: tx.tipo,
+    timestamp: tx.timestamp,
+  });
+}
+
 function validateTransaction(tx, secret) {
-  const hmacSecret = secret || process.env.HMAC_SECRET || 'change-me-in-production';
+  const hmacSecret = secret || process.env.HMAC_SECRET;
+  if (!hmacSecret) throw new Error('HMAC_SECRET is not configured');
   const errors = [];
 
   // 1. Required fields
@@ -47,7 +60,7 @@ function validateTransaction(tx, secret) {
     tx.id_lote && tx.origen && tx.destino && tx.cantidad && tx.tipo;
 
   if (firmaPresent && payloadFieldsPresent) {
-    const payload = `${tx.id_lote}:${tx.origen}:${tx.destino}:${tx.cantidad}:${tx.tipo}`;
+    const payload = buildFirmaPayload(tx);
     if (!verify(payload, tx.firma, hmacSecret)) {
       errors.push('firma is invalid');
     }
@@ -56,4 +69,4 @@ function validateTransaction(tx, secret) {
   return { valid: errors.length === 0, errors };
 }
 
-module.exports = { validateTransaction };
+module.exports = { validateTransaction, buildFirmaPayload };

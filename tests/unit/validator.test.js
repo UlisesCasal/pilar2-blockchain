@@ -10,6 +10,8 @@ beforeAll(() => {
   validateTransaction = require('../../validator/index').validateTransaction;
 });
 
+const { buildFirmaPayload } = require('../../validator/index');
+
 // Helper: build a fully valid transaction with correct HMAC signature
 function makeValidTx(overrides = {}) {
   const secret = 'test-secret';
@@ -20,10 +22,10 @@ function makeValidTx(overrides = {}) {
     destino: 'empresa_B',
     cantidad: 100,
     tipo: 'MINERAL',
-    timestamp: new Date().toISOString(),
+    timestamp: '2026-06-14T12:00:00.000Z',
     ...overrides,
   };
-  const payload = `${base.id_lote}:${base.origen}:${base.destino}:${base.cantidad}:${base.tipo}`;
+  const payload = buildFirmaPayload(base);
   const firma = crypto.createHmac('sha256', secret).update(payload).digest('hex');
   return { ...base, firma };
 }
@@ -41,9 +43,6 @@ describe('validateTransaction', () => {
   // 2. Valid CRUDO transaction
   test('valid CRUDO transaction returns { valid: true, errors: [] }', () => {
     const tx = makeValidTx({ tipo: 'CRUDO' });
-    // Re-sign with CRUDO tipo
-    const payload = `${tx.id_lote}:${tx.origen}:${tx.destino}:${tx.cantidad}:CRUDO`;
-    tx.firma = crypto.createHmac('sha256', secret).update(payload).digest('hex');
     const result = validateTransaction(tx, secret);
     expect(result).toEqual({ valid: true, errors: [] });
   });
