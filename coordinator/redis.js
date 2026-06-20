@@ -74,4 +74,21 @@ async function acquireLock(prevHash) {
   return result === 'OK';
 }
 
-module.exports = { storeBlock, getChain, getBlock, acquireLock };
+async function getTransactionsByLot(lotId) {
+  const chain = await getChain();
+  const results = [];
+  for (const block of chain) {
+    for (const tx of block.transactions) {
+      if (tx.id_lote === lotId) {
+        results.push({
+          tx,
+          block_hash: block.block_hash,
+          block_timestamp: block.timestamp,
+        });
+      }
+    }
+  }
+  return results;
+}
+
+module.exports = { storeBlock, getChain, getBlock, acquireLock, getTransactionsByLot };

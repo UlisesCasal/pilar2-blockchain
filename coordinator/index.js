@@ -4,15 +4,23 @@ require('dotenv').config();
 
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const { createLogger } = require('../shared/logger');
+const logger = createLogger('coordinator');
 
 const { buildPayload, buildBlock } = require('../shared/block');
 const { md5 } = require('../shared/hash');
-const { storeBlock, getChain, getBlock, acquireLock } = require('./redis');
-const { publishTask, consumeResults, getChannel, QUEUES } = require('./rabbitmq');
+const { storeBlock, getChain, getBlock, acquireLock, getTransactionsByLot } = require('./redis');
+const { listEntities, getPrivateKey } = require('../shared/entity-keys');
+const { signTransaction } = require('../shared/crypto');
+const { publishTask, consumeResults, consumeDLQ, getChannel, publishBlockConfirmed, QUEUES } = require('./rabbitmq');
+const { LeaderElection } = require('./leader-election');
 const { split } = require('../pool/nonce-splitter');
 
 const app = express();
 app.use(express.json());
+
+let election = null;
+let _consumerTag = null;
 
 // --- Config ---
 const PORT = parseInt(process.env.PORT_COORDINATOR || '3000');
@@ -36,14 +44,14 @@ async function handleResult(result) {
   const lockKey = result.prev_hash || result.task_id;
   const locked = await acquireLock(lockKey);
   if (!locked) {
-    console.log('[coordinator] Lock not acquired — another worker already committed this block');
+    logger.info('Lock not acquired — another worker already committed this block');
     return;
   }
 
   // NCT.4: Verify the nonce
   const hash = md5(result.payload + result.nonce);
   if (!hash.startsWith(DIFFICULTY)) {
-    console.warn('[coordinator] Invalid nonce received — hash does not meet difficulty, discarding');
+    logger.warn('Invalid nonce received — hash does not meet difficulty, discarding');
     return;
   }
 
@@ -55,7 +63,8 @@ async function handleResult(result) {
   );
 
   await storeBlock(block);
-  console.log(`[coordinator] Block committed: ${block.block_hash}`);
+  await publishBlockConfirmed(block);
+  logger.info('Block committed: %s', block.block_hash);
 }
 
 // --- Routes ---
@@ -96,7 +105,7 @@ app.post('/mine', async (req, res) => {
 
     res.json({ status: 'mining started', tasks: ranges.length });
   } catch (err) {
-    console.error('[coordinator] /mine error:', err.message);
+    logger.error({ err: err.message }, '/mine error');
     res.status(500).json({ error: 'Internal error', details: [err.message] });
   }
 });
@@ -114,7 +123,7 @@ app.post('/transaction', async (req, res) => {
     const data = await response.json();
     res.status(response.status).json(data);
   } catch (err) {
-    console.error('[coordinator] /transaction forward error:', err.message);
+    logger.error({ err: err.message }, '/transaction forward error');
     res.status(502).json({ error: 'Pool unreachable', details: [err.message] });
   }
 });
@@ -129,8 +138,9 @@ app.get('/status', async (_req, res) => {
     res.json({
       nct: 'OK',
       chain_length: chain.length,
-      pending_tx: 0, // Pool owns pending count; coordinator doesn't track it
+      pending_tx: 0,
       last_block: lastBlock ? lastBlock.block_hash : null,
+      role: election ? (election.isLeader() ? 'leader' : 'follower') : 'unknown',
     });
   } catch (err) {
     res.status(500).json({ error: 'Status error', details: [err.message] });
@@ -177,6 +187,51 @@ app.get('/rabbitmq/status', async (_req, res) => {
   }
 });
 
+app.get('/chain', async (_req, res) => {
+  try {
+    const chain = await getChain();
+    res.json(chain);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/chain/lot/:lotId', async (req, res) => {
+  try {
+    const results = await getTransactionsByLot(req.params.lotId);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/chain/:blockHash', async (req, res) => {
+  try {
+    const block = await getBlock(req.params.blockHash);
+    if (!block) return res.status(404).json({ error: 'Block not found' });
+    res.json(block);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/entities', (_req, res) => {
+  res.json(listEntities());
+});
+
+app.post('/sign', (req, res) => {
+  const { entity, transaction } = req.body;
+  if (!entity || !transaction) {
+    return res.status(400).json({ error: 'entity and transaction required' });
+  }
+  const privateKey = getPrivateKey(entity);
+  if (!privateKey) {
+    return res.status(404).json({ error: `Unknown entity: ${entity}` });
+  }
+  const firma = signTransaction(transaction, privateKey);
+  res.json({ ...transaction, firma });
+});
+
 // --- Startup ---
 
 async function start() {
@@ -192,18 +247,45 @@ async function start() {
         block_hash: md5('genesis'),
       };
       await storeBlock(genesis);
-      console.log('[coordinator] Genesis block created:', genesis.block_hash);
+      logger.info('Genesis block created: %s', genesis.block_hash);
     }
 
-    // Start consuming mining results
-    await consumeResults(handleResult);
-    console.log('[coordinator] Consuming mining_results...');
+    election = new LeaderElection();
+
+    election.on('elected', async () => {
+      logger.info('Elected as leader — starting result consumer');
+      try {
+        const { consumerTag } = await consumeResults(handleResult);
+        _consumerTag = consumerTag;
+      } catch (err) {
+        logger.error({ err: err.message }, 'Failed to start consumer');
+      }
+    });
+
+    election.on('demoted', async () => {
+      logger.info('Demoted — cancelling result consumer');
+      if (_consumerTag) {
+        try {
+          const ch = await getChannel();
+          await ch.cancel(_consumerTag);
+        } catch (err) {
+          logger.error({ err: err.message }, 'Failed to cancel consumer');
+        }
+        _consumerTag = null;
+      }
+    });
+
+    await election.start();
+
+    await consumeDLQ((content, headers) => {
+      logger.warn({ content }, 'DLQ message');
+    });
 
     app.listen(PORT, () => {
-      console.log(`[coordinator] Listening on port ${PORT}`);
+      logger.info('Listening on port %d', PORT);
     });
   } catch (err) {
-    console.error('[coordinator] Startup failed:', err.message);
+    logger.error({ err: err.message }, 'Startup failed');
     process.exit(1);
   }
 }

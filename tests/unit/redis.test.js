@@ -18,10 +18,10 @@ const mockRedis = {
 Redis.mockImplementation(() => mockRedis);
 
 // Require after mock is configured
-let storeBlock, getChain, getBlock, acquireLock;
+let storeBlock, getChain, getBlock, acquireLock, getTransactionsByLot;
 
 beforeAll(() => {
-  ({ storeBlock, getChain, getBlock, acquireLock } = require('../../coordinator/redis'));
+  ({ storeBlock, getChain, getBlock, acquireLock, getTransactionsByLot } = require('../../coordinator/redis'));
 });
 
 beforeEach(() => {
@@ -157,5 +157,48 @@ describe('acquireLock', () => {
     const result = await acquireLock('prevHash123');
 
     expect(result).toBe(false);
+  });
+});
+
+describe('getTransactionsByLot', () => {
+  it('returns all transactions matching lotId across blocks', async () => {
+    const block1Raw = {
+      previous_hash: '0'.repeat(32),
+      nonce: '1',
+      timestamp: '2026-06-20T00:00:00Z',
+      transactions: JSON.stringify([
+        { id: '1', id_lote: 'LOTE-001', origen: 'mina', destino: 'planta', cantidad: 100, tipo: 'MINERAL' },
+        { id: '2', id_lote: 'LOTE-002', origen: 'pozo', destino: 'refineria', cantidad: 50, tipo: 'CRUDO' },
+      ]),
+      block_hash: 'block1hash',
+    };
+    const block2Raw = {
+      previous_hash: 'block1hash',
+      nonce: '2',
+      timestamp: '2026-06-20T01:00:00Z',
+      transactions: JSON.stringify([
+        { id: '3', id_lote: 'LOTE-001', origen: 'planta', destino: 'refineria', cantidad: 100, tipo: 'MINERAL' },
+      ]),
+      block_hash: 'block2hash',
+    };
+
+    mockRedis.lrange.mockResolvedValue(['block1hash', 'block2hash']);
+    mockRedis.hgetall
+      .mockResolvedValueOnce(block1Raw)
+      .mockResolvedValueOnce(block2Raw);
+
+    const results = await getTransactionsByLot('LOTE-001');
+    expect(results).toHaveLength(2);
+    expect(results[0].tx.id).toBe('1');
+    expect(results[0].block_hash).toBe('block1hash');
+    expect(results[1].tx.id).toBe('3');
+    expect(results[1].block_hash).toBe('block2hash');
+  });
+
+  it('returns empty array for unknown lotId', async () => {
+    mockRedis.lrange.mockResolvedValue([]);
+
+    const results = await getTransactionsByLot('NONEXISTENT');
+    expect(results).toEqual([]);
   });
 });
