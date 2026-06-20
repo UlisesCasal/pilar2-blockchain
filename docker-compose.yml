@@ -35,12 +35,16 @@ services:
     build: .
     environment:
       SERVICE: validator
-      HMAC_SECRET: ${HMAC_SECRET}
+
       PORT_VALIDATOR: 3003
-    ports:
-      - "3003:3003"
+      LOG_LEVEL: info
+    volumes:
+      - "./logs:/app/logs"
+      - ./keys:/app/keys:ro
     networks:
       - blockchain
+    deploy:
+      replicas: 2
 
   coordinator:
     build: .
@@ -48,12 +52,13 @@ services:
       SERVICE: coordinator
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
       REDIS_URL: redis://redis:6379
-      HMAC_SECRET: ${HMAC_SECRET}
+
       DIFFICULTY: ${DIFFICULTY:-0000}
       POOL_URL: http://pool:3001
       PORT_COORDINATOR: 3000
-    ports:
-      - "3000:3000"
+      LOG_LEVEL: info
+    volumes:
+      - "./logs:/app/logs"
     networks:
       - blockchain
     depends_on:
@@ -61,17 +66,23 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      replicas: 2
 
   pool:
     build: .
     environment:
       SERVICE: pool
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      HMAC_SECRET: ${HMAC_SECRET}
+
       BLOCK_THRESHOLD: ${BLOCK_THRESHOLD:-10}
       COORDINATOR_URL: http://coordinator:3000
       WORKER_TTL_MS: 30000
       PORT_POOL: 3001
+      LOG_LEVEL: info
+    volumes:
+      - "./logs:/app/logs"
+      - ./keys:/app/keys:ro
     ports:
       - "3001:3001"
     networks:
@@ -87,11 +98,15 @@ services:
     environment:
       SERVICE: worker
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      HMAC_SECRET: ${HMAC_SECRET}
+
       PILAR1_CPU_BINARY: ./tpi/pilar1/Hit7/CPU/pow_cpu_range.js
+      PILAR1_GPU_BINARY: ./tpi/pilar1/Hit7/GPU/pow_gpu_range
       WORKER_TYPE: CPU
       KEEPALIVE_INTERVAL_MS: 10000
       PORT_WORKER: 3002
+      LOG_LEVEL: info
+    volumes:
+      - "./logs:/app/logs"
     networks:
       - blockchain
     depends_on:
@@ -99,3 +114,15 @@ services:
         condition: service_healthy
     deploy:
       replicas: 2
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    networks:
+      - blockchain
+    depends_on:
+      coordinator:
+        condition: service_started
+      pool:
+        condition: service_started
