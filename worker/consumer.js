@@ -3,6 +3,8 @@
 const { createChannel } = require('../shared/amqp');
 const { mine } = require('./miner');
 const { v4: uuidv4 } = require('uuid');
+const { createLogger } = require('../shared/logger');
+const logger = createLogger('worker');
 
 const WORKER_ID = process.env.WORKER_ID || uuidv4();
 const WORKER_TYPE = process.env.WORKER_TYPE || 'CPU';
@@ -22,7 +24,10 @@ async function startConsuming(rabbitmqUrl) {
   const { channel } = await createChannel(rabbitmqUrl);
 
   await channel.assertQueue('mining_tasks', { durable: true });
-  await channel.assertQueue('mining_results', { durable: true });
+  await channel.assertQueue('mining_results', {
+    durable: true,
+    arguments: { 'x-dead-letter-exchange': 'dlx_mining' },
+  });
   await channel.prefetch(1);
 
   channel.consume(
@@ -52,7 +57,7 @@ async function startConsuming(rabbitmqUrl) {
           transactions: task.transactions,
         };
       } catch (err) {
-        console.error(`[worker/${WORKER_ID}] mine error:`, err.message);
+        logger.error({ err: err.message, workerId: WORKER_ID }, 'Mine error');
         result = {
           task_id: task.task_id,
           worker_id: WORKER_ID,
@@ -72,7 +77,7 @@ async function startConsuming(rabbitmqUrl) {
     { noAck: false }
   );
 
-  console.log(`[worker/${WORKER_ID}] Consuming mining_tasks (type=${WORKER_TYPE})`);
+  logger.info({ workerId: WORKER_ID, type: WORKER_TYPE }, 'Consuming mining_tasks');
 }
 
 module.exports = { startConsuming, WORKER_ID, WORKER_TYPE };
