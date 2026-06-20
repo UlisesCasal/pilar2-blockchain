@@ -11,6 +11,9 @@ export default {
         'assayers-gold': '#B8860B',
         malachite: '#2D6A4F',
         garnet: '#9B2335',
+        'gold-light': '#FFF8E7',
+        'malachite-light': '#F0F7F4',
+        'slate-light': '#F5F6F7',
       },
       fontFamily: {
         serif: ['"DM Serif Display"', 'serif'],
