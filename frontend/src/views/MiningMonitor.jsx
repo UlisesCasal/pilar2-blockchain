@@ -1,12 +1,18 @@
 import { usePolling } from '../hooks/usePolling';
 import { api } from '../api/client';
 
-function MetricCard({ label, value, detail, accent }) {
+function MetricCard({ label, value, detail, stripe, delay }) {
   return (
-    <div className={`bg-stone/20 border border-stone rounded-sm px-5 py-4 border-l-2 ${accent}`}>
-      <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">{label}</span>
-      <p className="font-serif text-3xl mt-1">{value}</p>
-      <p className="font-serif italic text-xs text-slate mt-0.5">{detail}</p>
+    <div
+      className="bg-white rounded-lg shadow-card overflow-hidden transition-lift animate-fade-up"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className={`h-1 ${stripe}`} />
+      <div className="px-5 py-4">
+        <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">{label}</span>
+        <p className="font-serif text-3xl mt-1">{value}</p>
+        <p className="text-[11px] text-slate mt-0.5">{detail}</p>
+      </div>
     </div>
   );
 }
@@ -45,12 +51,12 @@ export default function MiningMonitor() {
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-8 h-8 rounded-sm bg-slate/10 flex items-center justify-center">
+        <div className="w-8 h-8 rounded-lg bg-slate/10 flex items-center justify-center">
           <span className="text-slate text-sm">⚡</span>
         </div>
         <div>
-          <h2 className="font-serif text-2xl">Mining Monitor</h2>
-          <p className="font-serif italic text-slate text-sm">Real-time view of the distributed mining infrastructure</p>
+          <h2 className="font-serif text-2xl">Monitor de Minería</h2>
+          <p className="font-serif italic text-slate text-sm">Vista en tiempo real de la infraestructura de minado distribuido</p>
         </div>
       </div>
 
@@ -58,72 +64,76 @@ export default function MiningMonitor() {
         <MetricCard
           label="Workers"
           value={scale ? (scale.gpu_workers + scale.cpu_workers) : '—'}
-          detail={scale ? `${scale.gpu_workers} GPU · ${scale.cpu_workers} CPU` : 'connecting...'}
-          accent="border-l-assayers-gold"
+          detail={scale ? `${scale.gpu_workers} GPU · ${scale.cpu_workers} CPU` : 'conectando...'}
+          stripe="bg-assayers-gold"
+          delay={0}
         />
         <MetricCard
-          label="Pending"
+          label="Pendientes"
           value={pool?.pending ?? '—'}
-          detail="in transaction pool"
-          accent="border-l-malachite"
+          detail="en el pool de transacciones"
+          stripe="bg-malachite"
+          delay={80}
         />
         <MetricCard
-          label="Queue Depth"
+          label="Cola de Tareas"
           value={rabbit?.queue_depth ?? '—'}
-          detail="mining task messages"
-          accent="border-l-slate"
+          detail="mensajes en cola de minado"
+          stripe="bg-slate"
+          delay={160}
         />
         <MetricCard
-          label="Difficulty"
+          label="Dificultad"
           value="0000"
-          detail="4-char hash prefix"
-          accent="border-l-graphite"
+          detail="prefijo de 4 caracteres"
+          stripe="bg-graphite"
+          delay={240}
         />
       </div>
 
       <div className="grid grid-cols-2 gap-8">
-        <div>
-          <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Coordinator Cluster</span>
-          <div className="mt-3 bg-stone/20 border border-stone rounded-sm px-5 py-2">
+        <div className="animate-fade-up" style={{ animationDelay: '100ms' }}>
+          <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Clúster de Coordinadores</span>
+          <div className="mt-3 bg-white rounded-lg shadow-card px-5 py-2">
             <StatusRow
-              label="This node"
-              value={status?.role ?? 'unknown'}
+              label="Este nodo"
+              value={status?.role === 'leader' ? 'líder' : status?.role ?? 'desconocido'}
               variant={status?.role === 'leader' ? 'gold' : 'slate'}
-              detail={`chain: ${status?.chain_length ?? '—'} blocks`}
+              detail={`cadena: ${status?.chain_length ?? '—'} bloques`}
             />
           </div>
           <p className="text-[11px] text-slate mt-2 font-serif italic">
             {status?.role === 'leader'
-              ? 'This coordinator won the Bully election and is processing mining results'
-              : 'Standing by — will take over if the leader fails'}
+              ? 'Este coordinador ganó la elección Bully y procesa resultados de minado'
+              : 'En espera — asumirá el liderazgo si el líder falla'}
           </p>
         </div>
 
-        <div>
-          <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Auto-Scale</span>
-          <div className="mt-3 bg-stone/20 border border-stone rounded-sm px-5 py-2">
+        <div className="animate-fade-up" style={{ animationDelay: '200ms' }}>
+          <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Auto-Escalado</span>
+          <div className="mt-3 bg-white rounded-lg shadow-card px-5 py-2">
             <StatusRow
-              label="Scale needed"
-              value={scale?.scale_needed ? 'yes' : 'no'}
+              label="Escalado necesario"
+              value={scale?.scale_needed ? 'sí' : 'no'}
               variant={scale?.scale_needed ? 'garnet' : 'malachite'}
             />
             <StatusRow
-              label="Last request"
-              value={scale?.last_scale_request ? new Date(scale.last_scale_request).toLocaleTimeString() : 'none'}
+              label="Última solicitud"
+              value={scale?.last_scale_request ? new Date(scale.last_scale_request).toLocaleTimeString('es-AR') : 'ninguna'}
               variant="slate"
             />
           </div>
         </div>
       </div>
 
-      <div className="mt-8">
-        <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Dead Letter Queue</span>
-        <div className="mt-3 bg-stone/20 border border-stone rounded-sm px-5 py-4">
+      <div className="mt-8 animate-fade-up" style={{ animationDelay: '300ms' }}>
+        <span className="font-semibold uppercase tracking-widest text-[10px] text-slate">Cola de Mensajes Fallidos</span>
+        <div className="mt-3 bg-white rounded-lg shadow-card px-5 py-4">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-malachite" />
-            <p className="font-serif italic text-sm text-malachite">No failures recorded</p>
+            <p className="font-serif italic text-sm text-malachite">Sin fallas registradas</p>
           </div>
-          <p className="text-[11px] text-slate mt-1 font-serif italic">Failed mining results are routed here via the DLX exchange after 4 retries with exponential backoff</p>
+          <p className="text-[11px] text-slate mt-1 font-serif italic">Los resultados de minado fallidos se redirigen aquí vía intercambio DLX tras 4 reintentos con backoff exponencial</p>
         </div>
       </div>
     </div>

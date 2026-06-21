@@ -1,3 +1,12 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer utilities {
+  .transition-lift {
+    @apply transition-all duration-200;
+  }
+  .transition-lift:hover {
+    @apply shadow-card-hover -translate-y-0.5;
+  }
+}

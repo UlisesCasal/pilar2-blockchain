@@ -6,24 +6,27 @@ export default function OverviewBar({ role }) {
   const { data: pool } = usePolling(api.getPoolStatus);
 
   const metrics = [
-    { label: 'Chain Length', value: status?.chain_length ?? '—', detail: 'confirmed blocks', accent: 'border-malachite/40' },
-    { label: 'Active Workers', value: pool ? (pool.gpu_workers + pool.cpu_workers) : '—', detail: pool ? `${pool.gpu_workers} GPU · ${pool.cpu_workers} CPU` : 'connecting...', accent: 'border-assayers-gold/40' },
-    { label: 'Pending Tx', value: pool?.pending ?? '—', detail: 'in transaction pool', accent: 'border-slate/40' },
-    { label: 'Node Role', value: status?.role ?? '—', detail: status?.role === 'leader' ? 'accepting results' : 'standby replica', accent: status?.role === 'leader' ? 'border-assayers-gold/40' : 'border-slate/40' },
+    { label: 'Bloques', value: status?.chain_length ?? '—', detail: 'confirmados en la cadena', stripe: 'bg-malachite' },
+    { label: 'Workers', value: pool ? (pool.gpu_workers + pool.cpu_workers) : '—', detail: pool ? `${pool.gpu_workers} GPU · ${pool.cpu_workers} CPU` : 'conectando...', stripe: 'bg-assayers-gold' },
+    { label: 'Pendientes', value: pool?.pending ?? '—', detail: 'en el pool de transacciones', stripe: 'bg-slate' },
+    { label: 'Dificultad', value: status?.difficulty ?? '0000', detail: 'prefijo hash requerido', stripe: 'bg-graphite' },
   ];
 
   return (
-    <div className="bg-stone/30 border-b border-stone">
-      <div className="px-8 py-4 flex items-center gap-6">
-        <div className="flex items-center gap-2 mr-2">
-          <div className="w-2 h-2 rounded-full bg-malachite animate-pulse" />
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-malachite">Live</span>
-        </div>
-        {metrics.map((m) => (
-          <div key={m.label} className={`flex flex-col border-l-2 ${m.accent} pl-3`}>
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-slate">{m.label}</span>
-            <span className="font-serif text-xl leading-tight">{m.value}</span>
-            <span className="font-serif italic text-[11px] text-slate">{m.detail}</span>
+    <div className="px-8 pt-6 pb-2">
+      <div className="grid grid-cols-4 gap-4">
+        {metrics.map((m, i) => (
+          <div
+            key={m.label}
+            className="bg-white rounded-lg shadow-card overflow-hidden animate-fade-up"
+            style={{ animationDelay: `${i * 80}ms` }}
+          >
+            <div className={`h-1 ${m.stripe}`} />
+            <div className="px-4 py-3">
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-slate">{m.label}</span>
+              <p className="font-serif text-2xl mt-0.5 leading-tight">{m.value}</p>
+              <p className="text-[11px] text-slate mt-0.5">{m.detail}</p>
+            </div>
           </div>
         ))}
       </div>
