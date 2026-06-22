@@ -1,0 +1,53 @@
+project: pilar2
+initialized: "2026-06-14"
+artifact_store: hybrid
+
+context: |
+  University project: Sistemas Distribuidos y Programación Paralela 2026.
+  Pilar 2 is the distributed infrastructure layer of a blockchain system in Node.js.
+  Services: NCT coordinator, transaction pool, workers, validator, RabbitMQ, Redis.
+  Deployment: Docker Compose (local) → Kubernetes (Pilar 3).
+  Greenfield — no source files exist yet.
+
+stack:
+  language: Node.js
+  runtime: Node.js (version TBD)
+  package_manager: npm (default — no package.json yet)
+  containerization: Docker Compose (planned)
+  orchestration: Kubernetes (Pilar 3, out of scope for now)
+  messaging: RabbitMQ (planned)
+  persistence: Redis (planned)
+
+testing:
+  strict_tdd: true
+  runner: jest
+  runner_command: "npx jest"
+  coverage_command: "npx jest --coverage"
+  layers:
+    unit: true
+    integration: false
+    e2e: false
+  quality:
+    linter: false
+    type_checker: false
+    formatter: false
+  note: "Greenfield — no package.json yet. Jest assumed as default for Node.js. Re-run sdd-init after scaffolding."
+
+phases:
+  proposal:
+    required_fields: [scope, approach, rollback]
+  spec:
+    required_fields: [functional_requirements, non_functional_requirements, acceptance_criteria]
+  design:
+    required_fields: [architecture, data_flow, component_boundaries]
+  tasks:
+    review_budget_lines: 400
+    delivery_strategy: ask-on-risk
+  apply:
+    strict_tdd: true
+    test_command: "npx jest"
+  verify:
+    strict_tdd: true
+    test_command: "npx jest"
+  archive:
+    format: markdown

@@ -75,7 +75,7 @@ services:
       SERVICE: pool
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
 
-      BLOCK_THRESHOLD: ${BLOCK_THRESHOLD:-10}
+      BLOCK_THRESHOLD: ${BLOCK_THRESHOLD:-1}
       COORDINATOR_URL: http://coordinator:3000
       WORKER_TTL_MS: 30000
       PORT_POOL: 3001

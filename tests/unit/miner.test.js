@@ -13,6 +13,17 @@ const EventEmitter = require('events');
 
 // Mock child_process before requiring miner
 jest.mock('child_process');
+jest.mock('../../shared/logger', () => ({
+  createLogger: () => ({
+    info: jest.fn(),
+    error: jest.fn(),
+    warn: jest.fn(),
+    debug: jest.fn(),
+    fatal: jest.fn(),
+    trace: jest.fn(),
+    bindings: () => ({}),
+  }),
+}));
 const { spawn } = require('child_process');
 
 const { mine } = require('../../worker/miner');
@@ -112,5 +123,50 @@ describe('worker/miner', () => {
       nonce: '99999',
       hash: '0000deadbeef',
     });
+  });
+
+  test('CPU mode spawns node with CPU_BINARY', async () => {
+    const stdout = 'Nonce: 123\nHash: 0000abc\n';
+    spawn.mockReturnValue(makeProc(stdout));
+
+    await mine({
+      payload: 'test',
+      difficulty: '0000',
+      nonceStart: 0,
+      nonceEnd: 100,
+    });
+
+    expect(spawn).toHaveBeenCalledWith(
+      'node',
+      expect.arrayContaining(['test', '0000', '0', '100'])
+    );
+  });
+
+  test('GPU mode spawns the GPU binary directly', async () => {
+    process.env.WORKER_TYPE = 'GPU';
+    process.env.PILAR1_GPU_BINARY = '/usr/local/bin/pow_gpu';
+    jest.resetModules();
+
+    jest.mock('child_process');
+    const cpGpu = require('child_process');
+    const { mine: mineGpu } = require('../../worker/miner');
+
+    const stdout = 'Nonce: 456\nHash: 0000def\n';
+    cpGpu.spawn.mockReturnValue(makeProc(stdout));
+
+    await mineGpu({
+      payload: 'test',
+      difficulty: '0000',
+      nonceStart: 0,
+      nonceEnd: 100,
+    });
+
+    expect(cpGpu.spawn).toHaveBeenCalledWith(
+      '/usr/local/bin/pow_gpu',
+      ['test', '0000', '0', '100']
+    );
+
+    delete process.env.WORKER_TYPE;
+    delete process.env.PILAR1_GPU_BINARY;
   });
 });

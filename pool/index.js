@@ -11,23 +11,24 @@ const { validateTransaction } = require('../validator/index');
 const { makePool } = require('./transaction-pool');
 const { makeRegistry } = require('./worker-registry');
 const { split } = require('./nonce-splitter');
+const { createLogger } = require('../shared/logger');
+const logger = createLogger('pool');
 
 const app = express();
 app.use(express.json());
 
 // --- Config ---
 const PORT = parseInt(process.env.PORT_POOL || '3001');
-const BLOCK_THRESHOLD = parseInt(process.env.BLOCK_THRESHOLD || '10');
+const BLOCK_THRESHOLD = parseInt(process.env.BLOCK_THRESHOLD || '1');
 const DIFFICULTY = process.env.DIFFICULTY || '0000';
 const COORDINATOR_URL = process.env.COORDINATOR_URL || 'http://coordinator:3000';
-const HMAC_SECRET = process.env.HMAC_SECRET;
-if (!HMAC_SECRET) throw new Error('HMAC_SECRET environment variable is required');
 const WORKER_TTL_MS = parseInt(process.env.WORKER_TTL_MS || '30000');
 const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672';
 
 const QUEUES = {
   MINING_TASKS: 'mining_tasks',
   KEEPALIVE: 'keepalive',
+  SCALE_REQUESTS: 'scale_requests',
 };
 
 // --- State ---
@@ -35,6 +36,7 @@ const pool = makePool();
 const registry = makeRegistry({ ttlMs: WORKER_TTL_MS });
 
 let _channel = null;
+let lastScaleRequest = null;
 
 async function getChannel() {
   if (!_channel) {
@@ -44,6 +46,7 @@ async function getChannel() {
       durable: false,
       arguments: { 'x-message-ttl': 30000 },
     });
+    await channel.assertQueue(QUEUES.SCALE_REQUESTS, { durable: true });
     _channel = channel;
   }
   return _channel;
@@ -73,6 +76,24 @@ async function triggerMining(transactions) {
   const effectiveDifficulty = activeWorkers === 0
     ? DIFFICULTY.slice(0, Math.max(1, DIFFICULTY.length - 1))
     : DIFFICULTY;
+
+  if (activeWorkers === 0) {
+    const scaleRequest = {
+      type: 'scale_up',
+      service: 'worker',
+      reason: 'no_active_workers',
+      requested_count: 2,
+      timestamp: new Date().toISOString(),
+    };
+    ch.sendToQueue(
+      QUEUES.SCALE_REQUESTS,
+      Buffer.from(JSON.stringify(scaleRequest)),
+      { persistent: true }
+    );
+    lastScaleRequest = scaleRequest.timestamp;
+    logger.warn('No active workers — published scale request');
+  }
+
   const ranges = split(workerCount);
   const payload = buildPayload(transactions, prevHash);
 
@@ -104,39 +125,103 @@ app.post('/transaction', async (req, res) => {
   const tx = req.body;
 
   // Validate
-  const result = validateTransaction(tx, HMAC_SECRET);
+  const result = validateTransaction(tx);
   if (!result.valid) {
     return res.status(400).json({ valid: false, errors: result.errors });
   }
 
   pool.add(tx);
+  let miningTriggered = false;
 
   // Threshold check — flush and trigger mining atomically
   if (pool.size() >= BLOCK_THRESHOLD) {
     const batch = pool.flush();
     try {
       await triggerMining(batch);
+      miningTriggered = true;
     } catch (err) {
-      console.error('[pool] Failed to trigger mining:', err.message);
+      logger.error({ err: err.message }, 'Failed to trigger mining');
       // Re-add transactions back to pool on failure
       for (const t of batch) pool.add(t);
       return res.status(500).json({ error: 'Failed to trigger mining', details: [err.message] });
     }
   }
 
-  return res.status(201).json({ accepted: true, pending: pool.size() });
+  return res.status(201).json({
+    accepted: true,
+    pending: pool.size(),
+    threshold: BLOCK_THRESHOLD,
+    remaining: Math.max(0, BLOCK_THRESHOLD - pool.size()),
+    mining_triggered: miningTriggered,
+  });
 });
 
 /**
  * GET /status
  * Returns pool state and worker counts.
  */
+/**
+ * GET /pending
+ * Returns all pending transactions in the pool without flushing.
+ */
+app.get('/pending', (_req, res) => {
+  res.json({
+    pending_count: pool.size(),
+    threshold: BLOCK_THRESHOLD,
+    pending: pool.peek(),
+  });
+});
+
+/**
+ * GET /pending/lot/:lotId
+ * Filter pending transactions by lot ID for traceability.
+ */
+app.get('/pending/lot/:lotId', (req, res) => {
+  const results = pool.findByLot(req.params.lotId);
+  res.json({
+    lot_id: req.params.lotId,
+    pending_count: results.length,
+    transactions: results,
+  });
+});
+
+/**
+ * POST /mine
+ * Force-flush all pending transactions and trigger mining immediately.
+ * Useful for testing or when pool has not reached threshold.
+ */
+app.post('/mine', async (_req, res) => {
+  const batch = pool.flush();
+  if (batch.length === 0) {
+    return res.status(400).json({ error: 'No pending transactions to mine' });
+  }
+  try {
+    await triggerMining(batch);
+    res.json({ status: 'mining triggered', transactions: batch.length });
+  } catch (err) {
+    for (const t of batch) pool.add(t);
+    logger.error({ err: err.message }, 'Force mine failed');
+    res.status(500).json({ error: 'Failed to trigger mining', details: [err.message] });
+  }
+});
+
 app.get('/status', (_req, res) => {
   res.json({
     pool: 'OK',
     pending: pool.size(),
     gpu_workers: registry.count({ type: 'GPU' }),
     cpu_workers: registry.count({ type: 'CPU' }),
+  });
+});
+
+app.get('/scale/status', (_req, res) => {
+  const activeWorkers = registry.count();
+  res.json({
+    active_workers: activeWorkers,
+    gpu_workers: registry.count({ type: 'GPU' }),
+    cpu_workers: registry.count({ type: 'CPU' }),
+    scale_needed: activeWorkers === 0,
+    last_scale_request: lastScaleRequest,
   });
 });
 
@@ -164,11 +249,20 @@ async function start() {
       { noAck: false }
     );
 
+    try {
+      const { subscribeBlockConfirmed } = require('../shared/amqp');
+      await subscribeBlockConfirmed(RABBITMQ_URL, (block) => {
+        logger.info('Block confirmed: %s', block.block_hash);
+      });
+    } catch (err) {
+      logger.warn({ err: err.message }, 'Could not subscribe to block confirmations');
+    }
+
     app.listen(PORT, () => {
-      console.log(`[pool] Listening on port ${PORT}`);
+      logger.info('Listening on port %d', PORT);
     });
   } catch (err) {
-    console.error('[pool] Startup failed:', err.message);
+    logger.error({ err: err.message }, 'Startup failed');
     process.exit(1);
   }
 }

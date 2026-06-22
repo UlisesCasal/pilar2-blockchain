@@ -26,6 +26,10 @@ export const api = {
       body: JSON.stringify(tx),
     }).then((r) => r.json()),
   getPoolStatus: () => fetchJSON(`${POOL}/status`),
+  getPending: () => fetchJSON(`${POOL}/pending`),
+  getPendingByLot: (lotId) => fetchJSON(`${POOL}/pending/lot/${lotId}`),
+  triggerMining: () =>
+    fetch(`${POOL}/mine`, { method: 'POST' }).then((r) => r.json()),
   getScaleStatus: () => fetchJSON(`${POOL}/scale/status`),
   getRabbitStatus: () => fetchJSON(`${COORDINATOR}/rabbitmq/status`),
 };

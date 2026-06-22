@@ -5,6 +5,8 @@ require('dotenv').config();
 const express = require('express');
 const { startConsuming, WORKER_ID, WORKER_TYPE } = require('./consumer');
 const { createChannel } = require('../shared/amqp');
+const { createLogger } = require('../shared/logger');
+const logger = createLogger('worker');
 
 const app = express();
 app.use(express.json());
@@ -62,12 +64,12 @@ async function start() {
 
   const port = parseInt(process.env.PORT_WORKER || '3002', 10);
   app.listen(port, () => {
-    console.log(`[worker/${WORKER_ID}] HTTP status on port ${port}`);
+    logger.info({ workerId: WORKER_ID }, 'HTTP status on port %d', port);
   });
 }
 
 start().catch((err) => {
-  console.error('[worker] Fatal startup error:', err);
+  logger.error({ err }, 'Fatal startup error');
   process.exit(1);
 });
 

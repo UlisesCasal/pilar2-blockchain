@@ -1,11 +1,20 @@
 'use strict';
 
 const { createChannel } = require('../shared/amqp');
+const { withRetry } = require('../shared/retry');
+const { createLogger } = require('../shared/logger');
+const logger = createLogger('coordinator');
 
 const QUEUES = {
   MINING_TASKS: 'mining_tasks',
   MINING_RESULTS: 'mining_results',
+  MINING_RESULTS_DLQ: 'mining_results_dlq',
   KEEPALIVE: 'keepalive',
+};
+
+const EXCHANGES = {
+  BLOCK_CONFIRMED: 'block_confirmed',
+  DLX_MINING: 'dlx_mining',
 };
 
 let _channel = null;
@@ -16,12 +25,19 @@ async function getChannel() {
       process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672'
     );
     await channel.assertQueue(QUEUES.MINING_TASKS, { durable: true });
-    await channel.assertQueue(QUEUES.MINING_RESULTS, { durable: true });
+    await channel.assertQueue(QUEUES.MINING_RESULTS, {
+      durable: true,
+      arguments: { 'x-dead-letter-exchange': EXCHANGES.DLX_MINING },
+    });
     await channel.assertQueue(QUEUES.KEEPALIVE, {
       durable: false,
       arguments: { 'x-message-ttl': 30000 },
     });
     await channel.prefetch(1);
+    await channel.assertExchange(EXCHANGES.BLOCK_CONFIRMED, 'fanout', { durable: false });
+    await channel.assertExchange(EXCHANGES.DLX_MINING, 'direct', { durable: true });
+    await channel.assertQueue(QUEUES.MINING_RESULTS_DLQ, { durable: true });
+    await channel.bindQueue(QUEUES.MINING_RESULTS_DLQ, EXCHANGES.DLX_MINING, '');
     _channel = channel;
   }
   return _channel;
@@ -46,21 +62,49 @@ async function publishTask(task) {
  */
 async function consumeResults(handler) {
   const ch = await getChannel();
-  await ch.consume(
+  return ch.consume(
     QUEUES.MINING_RESULTS,
     async (msg) => {
       if (!msg) return;
       try {
         const result = JSON.parse(msg.content.toString());
-        await handler(result);
+        await withRetry(() => handler(result));
         ch.ack(msg);
       } catch (err) {
-        console.error('[coordinator/rabbitmq] Error handling result:', err.message);
-        ch.nack(msg, false, false); // discard on handler error
+        logger.error({ err: err.message }, 'Error handling result');
+        ch.nack(msg, false, false);
       }
     },
     { noAck: false }
   );
 }
 
-module.exports = { publishTask, consumeResults, getChannel, QUEUES };
+async function consumeDLQ(handler) {
+  const ch = await getChannel();
+  return ch.consume(
+    QUEUES.MINING_RESULTS_DLQ,
+    async (msg) => {
+      if (!msg) return;
+      try {
+        const content = JSON.parse(msg.content.toString());
+        await handler(content, msg.properties.headers);
+        ch.ack(msg);
+      } catch (err) {
+        logger.error({ err: err.message }, 'DLQ handler error');
+        ch.nack(msg, false, false);
+      }
+    },
+    { noAck: false }
+  );
+}
+
+async function publishBlockConfirmed(block) {
+  const ch = await getChannel();
+  ch.publish(
+    EXCHANGES.BLOCK_CONFIRMED,
+    '',
+    Buffer.from(JSON.stringify(block))
+  );
+}
+
+module.exports = { publishTask, consumeResults, consumeDLQ, getChannel, publishBlockConfirmed, QUEUES, EXCHANGES };

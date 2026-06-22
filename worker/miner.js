@@ -2,14 +2,21 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const { createLogger } = require('../shared/logger');
 
-/**
- * Path to the Pilar 1 CPU PoW binary.
- * Override via PILAR1_CPU_BINARY environment variable.
- */
-const BINARY =
+const logger = createLogger('miner');
+
+const WORKER_TYPE = process.env.WORKER_TYPE || 'CPU';
+
+const CPU_BINARY =
   process.env.PILAR1_CPU_BINARY ||
   path.join(__dirname, '../../tpi/pilar1/Hit7/CPU/pow_cpu_range.js');
+
+const GPU_BINARY =
+  process.env.PILAR1_GPU_BINARY ||
+  path.join(__dirname, '../../tpi/pilar1/Hit7/GPU/pow_gpu_range');
+
+logger.info({ type: WORKER_TYPE }, 'Miner initialized');
 
 /**
  * Run the Pilar 1 PoW binary over the given nonce range.
@@ -23,13 +30,14 @@ const BINARY =
  */
 async function mine({ payload, difficulty, nonceStart, nonceEnd }) {
   return new Promise((resolve, reject) => {
-    const proc = spawn('node', [
-      BINARY,
-      payload,
-      difficulty,
-      String(nonceStart),
-      String(nonceEnd),
-    ]);
+    const isGpu = WORKER_TYPE === 'GPU';
+    const binary = isGpu ? GPU_BINARY : CPU_BINARY;
+    const args = isGpu
+      ? [payload, difficulty, String(nonceStart), String(nonceEnd)]
+      : [CPU_BINARY, payload, difficulty, String(nonceStart), String(nonceEnd)];
+    const cmd = isGpu ? binary : 'node';
+
+    const proc = spawn(cmd, args);
 
     let stdout = '';
 
@@ -70,4 +78,4 @@ async function mine({ payload, difficulty, nonceStart, nonceEnd }) {
   });
 }
 
-module.exports = { mine };
+module.exports = { mine, WORKER_TYPE, CPU_BINARY, GPU_BINARY };

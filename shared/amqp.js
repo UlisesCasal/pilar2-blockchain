@@ -1,6 +1,8 @@
 'use strict';
 
 const amqplib = require('amqplib');
+const { createLogger } = require('./logger');
+const logger = createLogger('amqp');
 
 /**
  * Connect to RabbitMQ with exponential backoff retries.
@@ -29,4 +31,22 @@ async function createChannel(url, { maxRetries = 6, baseDelayMs = 1000 } = {}) {
   }
 }
 
-module.exports = { createChannel };
+async function subscribeBlockConfirmed(url, handler) {
+  const { channel } = await createChannel(url);
+  await channel.assertExchange('block_confirmed', 'fanout', { durable: false });
+  const q = await channel.assertQueue('', { exclusive: true });
+  await channel.bindQueue(q.queue, 'block_confirmed', '');
+  channel.consume(q.queue, (msg) => {
+    if (!msg) return;
+    try {
+      const block = JSON.parse(msg.content.toString());
+      handler(block);
+    } catch (err) {
+      logger.error({ err: err.message }, 'Error handling block_confirmed');
+    }
+    channel.ack(msg);
+  }, { noAck: false });
+  return { channel };
+}
+
+module.exports = { createChannel, subscribeBlockConfirmed };

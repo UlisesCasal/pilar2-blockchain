@@ -36,7 +36,24 @@ function makePool() {
     return pending.length;
   }
 
-  return { add, flush, size };
+  /**
+   * Return all pending transactions without clearing the pool.
+   * @returns {Object[]}
+   */
+  function peek() {
+    return [...pending];
+  }
+
+  /**
+   * Find pending transactions matching a lot ID.
+   * @param {string} lotId
+   * @returns {Object[]}
+   */
+  function findByLot(lotId) {
+    return pending.filter(tx => tx.id_lote === lotId);
+  }
+
+  return { add, flush, size, peek, findByLot };
 }
 
 module.exports = { makePool };

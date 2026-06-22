@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Pickaxe, Search, Radio, Gem, Route, Zap, Hexagon, Link } from 'lucide-react';
 import OverviewBar from './components/OverviewBar';
 import BlockExplorer from './views/BlockExplorer';
 import CustodyTracker from './views/CustodyTracker';
@@ -8,47 +9,59 @@ import TransactionForm from './views/TransactionForm';
 const ROLES = {
   operador: {
     label: 'Operador',
-    icon: '⛏',
+    icon: Pickaxe,
     description: 'Registrar transferencias de custodia',
-    accent: 'assayers-gold',
+    accent: 'mineral',
     tabs: ['transactions', 'custody'],
   },
   auditor: {
     label: 'Auditor',
-    icon: '🔍',
+    icon: Search,
     description: 'Inspeccionar la cadena y trazabilidad',
-    accent: 'malachite',
+    accent: 'verified',
     tabs: ['explorer', 'custody'],
   },
   monitor: {
     label: 'Monitor',
-    icon: '📡',
+    icon: Radio,
     description: 'Observar infraestructura de minería',
-    accent: 'slate',
+    accent: 'crude',
     tabs: ['mining', 'explorer'],
   },
 };
 
 const ACCENT_STYLES = {
-  'assayers-gold': {
-    navActive: 'bg-assayers-gold/20 text-assayers-gold font-medium',
-    roleBorder: 'border-assayers-gold',
+  mineral: {
+    text: 'text-mineral',
+    bg: 'bg-mineral',
+    dim: 'bg-mineral-dim',
+    border: 'border-mineral',
+    shadow: 'shadow-glow-mineral',
+    dot: 'bg-mineral',
   },
-  malachite: {
-    navActive: 'bg-malachite/20 text-malachite font-medium',
-    roleBorder: 'border-malachite',
+  verified: {
+    text: 'text-verified',
+    bg: 'bg-verified',
+    dim: 'bg-verified-dim',
+    border: 'border-verified',
+    shadow: 'shadow-glow-verified',
+    dot: 'bg-verified',
   },
-  slate: {
-    navActive: 'bg-slate/20 text-white font-medium',
-    roleBorder: 'border-slate',
+  crude: {
+    text: 'text-crude',
+    bg: 'bg-crude',
+    dim: 'bg-crude-dim',
+    border: 'border-crude',
+    shadow: 'shadow-glow-crude',
+    dot: 'bg-crude',
   },
 };
 
 const TAB_CONFIG = {
-  explorer: { label: 'Explorador', icon: '◆' },
-  custody: { label: 'Trazabilidad', icon: '⟐' },
-  mining: { label: 'Minería', icon: '⚡' },
-  transactions: { label: 'Nueva Transferencia', icon: '⬡' },
+  explorer: { label: 'Explorador', icon: Gem },
+  custody: { label: 'Trazabilidad', icon: Route },
+  mining: { label: 'Minería', icon: Zap },
+  transactions: { label: 'Nueva Transferencia', icon: Hexagon },
 };
 
 const TAB_VIEWS = {
@@ -66,36 +79,66 @@ export default function App() {
   const availableTabs = currentRole.tabs;
   const activeTab = availableTabs.includes(tab) ? tab : availableTabs[0];
   const ActiveView = TAB_VIEWS[activeTab];
-  const accentStyles = ACCENT_STYLES[currentRole.accent];
+  const accent = ACCENT_STYLES[currentRole.accent];
 
   return (
-    <div className="flex min-h-screen">
-      <aside className="w-64 bg-graphite flex-shrink-0 flex flex-col text-white/80">
-        <div className="px-5 pt-6 pb-4">
-          <h1 className="font-serif text-xl text-white tracking-tight">Custody Chain</h1>
-          <p className="text-[11px] text-white/40 mt-0.5">Blockchain de custodia distribuida</p>
+    <div className="flex min-h-screen bg-base font-sans text-text-primary">
+      <a href="#main-content" className="skip-to-content">
+        Skip to content
+      </a>
+
+      {/* ── Sidebar ── */}
+      <aside
+        role="navigation"
+        className="w-64 glass flex-shrink-0 flex flex-col border-r border-white/[0.06]"
+      >
+        {/* Brand */}
+        <div className="px-5 pt-6 pb-5">
+          <div className="flex items-center gap-2">
+            <Link className="w-4.5 h-4.5 text-mineral" strokeWidth={2} aria-hidden="true" />
+            <h1 className="font-display font-bold text-lg text-text-primary tracking-tight">
+              Custody Chain
+            </h1>
+          </div>
+          <p className="text-[11px] text-text-muted mt-1 pl-[26px]">
+            Blockchain de custodia distribuida
+          </p>
         </div>
 
-        <div className="px-3 mb-4">
-          <span className="px-2 text-[10px] font-semibold uppercase tracking-widest text-white/30">Rol activo</span>
+        {/* Role selector */}
+        <div className="px-3 mb-5">
+          <span className="px-2 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+            Rol activo
+          </span>
           <div className="mt-2 space-y-1">
             {Object.entries(ROLES).map(([key, r]) => {
               const isActive = role === key;
               const styles = ACCENT_STYLES[r.accent];
+              const RoleIcon = r.icon;
               return (
                 <button
                   key={key}
                   onClick={() => { setRole(key); setTab(ROLES[key].tabs[0]); }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left text-sm transition-all ${
+                  className={`group w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left text-sm transition-premium active:scale-[0.97] cursor-pointer ${
                     isActive
-                      ? `bg-white/10 text-white border-l-2 ${styles.roleBorder}`
-                      : 'text-white/50 hover:text-white/70 hover:bg-white/5 border-l-2 border-transparent'
+                      ? `${styles.dim} ${styles.text} font-medium ${styles.shadow} ring-1 ring-white/[0.06] shadow-inner-highlight`
+                      : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.04] ring-1 ring-transparent'
                   }`}
                 >
-                  <span className="text-base">{r.icon}</span>
-                  <div>
-                    <p className="font-medium leading-tight">{r.label}</p>
-                    <p className="text-[10px] text-white/40 leading-tight">{r.description}</p>
+                  <RoleIcon
+                    className={`w-4 h-4 flex-shrink-0 transition-colors duration-200 ${
+                      isActive ? styles.text : 'text-text-muted group-hover:text-text-secondary'
+                    }`}
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <p className="leading-tight">{r.label}</p>
+                    <p className={`text-[10px] leading-tight mt-0.5 ${
+                      isActive ? 'opacity-70' : 'text-text-muted'
+                    }`}>
+                      {r.description}
+                    </p>
                   </div>
                 </button>
               );
@@ -103,37 +146,52 @@ export default function App() {
           </div>
         </div>
 
+        {/* Navigation */}
         <div className="px-3 flex-1">
-          <span className="px-2 text-[10px] font-semibold uppercase tracking-widest text-white/30">Navegación</span>
-          <nav className="mt-2 space-y-0.5">
-            {availableTabs.map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-all ${
-                  activeTab === t
-                    ? accentStyles.navActive
-                    : 'text-white/50 hover:text-white/70 hover:bg-white/5'
-                }`}
-              >
-                <span className="text-xs">{TAB_CONFIG[t].icon}</span>
-                {TAB_CONFIG[t].label}
-              </button>
-            ))}
+          <span className="px-2 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+            Navegación
+          </span>
+          <nav aria-label="Main navigation" className="mt-2 space-y-0.5">
+            {availableTabs.map((t) => {
+              const TabIcon = TAB_CONFIG[t].icon;
+              const isActiveTab = activeTab === t;
+              return (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-premium active:scale-[0.97] cursor-pointer ${
+                    isActiveTab
+                      ? `bg-white/[0.06] ${accent.text} font-medium border-l-2 ${accent.border} shadow-inner-highlight`
+                      : 'text-text-muted hover:text-text-secondary hover:bg-white/[0.04] border-l-2 border-transparent'
+                  }`}
+                >
+                  <TabIcon
+                    className={`w-3.5 h-3.5 flex-shrink-0 ${isActiveTab ? accent.text : ''}`}
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
+                  {TAB_CONFIG[t].label}
+                </button>
+              );
+            })}
           </nav>
         </div>
 
-        <div className="px-5 py-4 border-t border-white/10">
+        {/* Status footer */}
+        <div className="px-5 py-4 border-t border-white/[0.06]">
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-malachite animate-pulse" />
-            <span className="text-[10px] text-white/40 uppercase tracking-widest">Sistema activo</span>
+            <div className="w-2 h-2 rounded-full bg-verified animate-pulse-slow" />
+            <span className="text-[10px] text-text-muted uppercase tracking-widest">
+              Sistema activo
+            </span>
           </div>
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto bg-chalk">
+      {/* ── Main content ── */}
+      <main id="main-content" role="main" className="flex-1 overflow-y-auto bg-base">
         <OverviewBar role={role} />
-        <div className="p-8 max-w-[1200px]">
+        <div className="px-6 pt-4 pb-8 max-w-[1400px]">
           <div key={activeTab} className="animate-fade-up">
             <ActiveView />
           </div>
