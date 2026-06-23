@@ -112,6 +112,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      pool:
+        condition: service_started
     deploy:
       replicas: 2
 

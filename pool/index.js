@@ -121,13 +121,56 @@ async function triggerMining(transactions) {
  * POST /transaction
  * Validate tx, add to pool. If pool reaches threshold → trigger mining.
  */
+async function checkCustody(tx) {
+  const lotId = tx.id_lote;
+  const origen = tx.origen;
+
+  // Check pending pool first — most recent pending tx for this lot
+  const pendingForLot = pool.findByLot(lotId);
+  if (pendingForLot.length > 0) {
+    const lastPending = pendingForLot[pendingForLot.length - 1];
+    if (lastPending.destino !== origen) {
+      return { valid: false, holder: lastPending.destino };
+    }
+    return { valid: true };
+  }
+
+  // Check confirmed chain
+  try {
+    const res = await fetch(`${COORDINATOR_URL}/chain/lot/${encodeURIComponent(lotId)}`);
+    if (!res.ok) return { valid: true }; // coordinator unavailable — allow
+    const chainTxs = await res.json();
+    if (!Array.isArray(chainTxs) || chainTxs.length === 0) {
+      return { valid: true }; // new lot — anyone can originate
+    }
+    const lastEntry = chainTxs[chainTxs.length - 1];
+    const lastTx = lastEntry.tx || lastEntry;
+    if (lastTx.destino !== origen) {
+      return { valid: false, holder: lastTx.destino };
+    }
+    return { valid: true };
+  } catch (_) {
+    return { valid: true }; // coordinator unreachable — don't block
+  }
+}
+
 app.post('/transaction', async (req, res) => {
   const tx = req.body;
 
-  // Validate
+  // Validate schema + signature
   const result = validateTransaction(tx);
   if (!result.valid) {
     return res.status(400).json({ valid: false, errors: result.errors });
+  }
+
+  // Validate custody ownership
+  const custody = await checkCustody(tx);
+  if (!custody.valid) {
+    return res.status(403).json({
+      valid: false,
+      accepted: false,
+      errors: [`${tx.origen} does not hold custody of lot ${tx.id_lote}. Current holder: ${custody.holder}`],
+    });
   }
 
   pool.add(tx);

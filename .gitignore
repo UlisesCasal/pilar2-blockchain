@@ -4,3 +4,4 @@ node_modules/
 coverage/
 logs/
 frontend/dist
+data/*.db

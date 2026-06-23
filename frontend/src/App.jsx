@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { Pickaxe, Search, Radio, Gem, Route, Zap, Hexagon, Link } from 'lucide-react';
+import { Pickaxe, Search, Radio, Gem, Route, Zap, Hexagon, Link, LogOut } from 'lucide-react';
 import OverviewBar from './components/OverviewBar';
 import BlockExplorer from './views/BlockExplorer';
 import CustodyTracker from './views/CustodyTracker';
 import MiningMonitor from './views/MiningMonitor';
 import TransactionForm from './views/TransactionForm';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import LoginPage from './views/LoginPage';
 
 const ROLES = {
   operador: {
@@ -71,7 +73,8 @@ const TAB_VIEWS = {
   transactions: TransactionForm,
 };
 
-export default function App() {
+function AppShell() {
+  const { user, logout } = useAuth();
   const [role, setRole] = useState('operador');
   const [tab, setTab] = useState('transactions');
 
@@ -177,13 +180,20 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Status footer */}
+        {/* User footer */}
         <div className="px-5 py-4 border-t border-white/[0.06]">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-verified animate-pulse-slow" />
-            <span className="text-[10px] text-text-muted uppercase tracking-widest">
-              Sistema activo
-            </span>
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-text-primary truncate">{user?.displayName}</p>
+              <p className="text-[10px] text-text-muted truncate">{user?.name}</p>
+            </div>
+            <button
+              onClick={logout}
+              className="p-1.5 rounded-lg text-text-muted hover:text-anomaly hover:bg-anomaly-dim transition-premium cursor-pointer"
+              title="Cerrar sesión"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </aside>
@@ -198,5 +208,28 @@ export default function App() {
         </div>
       </main>
     </div>
+  );
+}
+
+function AuthGate() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-base">
+        <div className="text-text-muted text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) return <LoginPage />;
+  return <AppShell />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }

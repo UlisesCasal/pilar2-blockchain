@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Hexagon, Check, X, Loader2, Circle } from 'lucide-react';
+import { Hexagon, Check, X, Loader2, Circle, ShieldAlert } from 'lucide-react';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import RingChart from '../components/RingChart';
 
 const POLL_INTERVAL = 3000; // 3s
@@ -20,7 +21,7 @@ async function findLotInChain(lotId) {
 /**
  * Track the lifecycle of a single submitted transaction.
  */
-function TxTracker({ tx, lotId }) {
+function TxTracker({ tx, lotId, onStatusChange }) {
   const [status, setStatus] = useState('pending'); // pending → mining → confirming → confirmed | timeout
   const [detail, setDetail] = useState('');
   const [poolNeeded, setPoolNeeded] = useState(null);
@@ -62,6 +63,10 @@ function TxTracker({ tx, lotId }) {
       setDetail('Verificando...');
     }
   }, [lotId]);
+
+  useEffect(() => {
+    if (onStatusChange) onStatusChange(status);
+  }, [status, onStatusChange]);
 
   useEffect(() => {
     // Initial check
@@ -151,7 +156,7 @@ function TxTracker({ tx, lotId }) {
  * SVG Pipeline Stepper — visual guide for the transaction lifecycle.
  * Highlights step 1 as active when form is incomplete, step 1 complete when ready.
  */
-function PipelineStepper({ isReady, submitting }) {
+function PipelineStepper({ isReady, submitting, txStatus }) {
   const steps = [
     { label: 'Completar', sublabel: 'formulario' },
     { label: 'Firmar', sublabel: 'Ed25519' },
@@ -160,9 +165,12 @@ function PipelineStepper({ isReady, submitting }) {
     { label: 'Confirmar', sublabel: 'cadena' },
   ];
 
-  // Determine active step index
   let activeStep = 0;
-  if (submitting) activeStep = 1;
+  if (txStatus === 'confirmed') activeStep = 5;
+  else if (txStatus === 'mining') activeStep = 4;
+  else if (txStatus === 'pending') activeStep = 3;
+  else if (txStatus === 'sent') activeStep = 2;
+  else if (submitting) activeStep = 1;
   else if (isReady) activeStep = 1;
 
   const nodeRadius = 12;
@@ -313,6 +321,7 @@ function PipelineStepper({ isReady, submitting }) {
 }
 
 export default function TransactionForm() {
+  const { user } = useAuth();
   const [entities, setEntities] = useState([]);
   const [form, setForm] = useState({ tipo: 'MINERAL', origen: '', destino: '', id_lote: '', cantidad: '' });
   const [submissions, setSubmissions] = useState([]);
@@ -320,11 +329,18 @@ export default function TransactionForm() {
   const [poolInfo, setPoolInfo] = useState(null);
   const [miningResult, setMiningResult] = useState(null);
   const [error, setError] = useState(null);
+  const [lastTxStatus, setLastTxStatus] = useState(null);
 
   useEffect(() => {
     api.getEntities().then(setEntities).catch(() => {});
     refreshPoolInfo();
   }, []);
+
+  useEffect(() => {
+    if (user?.name) {
+      setForm((f) => ({ ...f, origen: user.name }));
+    }
+  }, [user]);
 
   async function refreshPoolInfo() {
     try {
@@ -355,7 +371,7 @@ export default function TransactionForm() {
     };
 
     try {
-      const signed = await api.signTransaction(form.origen, transaction);
+      const signed = await api.signTransaction(transaction);
       const result = await api.submitTransaction(signed);
 
       if (!result.accepted) {
@@ -371,6 +387,7 @@ export default function TransactionForm() {
         submittedAt: Date.now(),
       };
 
+      setLastTxStatus('sent');
       setSubmissions((s) => [txTrack, ...s]);
       setForm((f) => ({ ...f, id_lote: '', cantidad: '' }));
       await refreshPoolInfo();
@@ -395,6 +412,7 @@ export default function TransactionForm() {
     }
   }
 
+  const isImpostor = user?.name === 'impostor';
   const unit = form.tipo === 'MINERAL' ? 'toneladas' : 'barriles';
   const isReady = form.origen && form.destino && form.id_lote && form.cantidad;
 
@@ -418,7 +436,7 @@ export default function TransactionForm() {
         </div>
 
         {/* Pipeline Stepper */}
-        <PipelineStepper isReady={isReady} submitting={submitting} />
+        <PipelineStepper isReady={isReady} submitting={submitting} txStatus={lastTxStatus} />
 
         {/* Pool status bar */}
         {poolInfo && poolInfo.pending > 0 && (
@@ -499,25 +517,57 @@ export default function TransactionForm() {
               </div>
             </div>
 
+            {/* Impostor warning */}
+            {isImpostor && (
+              <div className="bg-anomaly-dim border border-anomaly/30 rounded-lg px-4 py-3 animate-fade-up">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-anomaly flex-shrink-0" />
+                  <div>
+                    <p className="text-anomaly text-sm font-semibold">Modo Impostor</p>
+                    <p className="text-text-muted text-xs mt-0.5">
+                      Selecciona una entidad a suplantar. La transaccion se firmara con TUS claves, no las de la entidad seleccionada. El validator la rechazara.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Origin and destination */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label htmlFor="origen" className="block text-xs font-semibold uppercase tracking-widest text-text-muted mb-2">Entidad de Origen</label>
-                <select
-                  id="origen"
-                  value={form.origen}
-                  onChange={(e) => update('origen', e.target.value)}
-                  className="w-full bg-base border border-border-subtle rounded-lg px-3 py-2.5 text-sm text-text-primary focus:border-mineral focus:outline-none hover:border-text-muted/40 transition-colors duration-200"
-                  required
-                >
-                  <option value="">Seleccionar origen...</option>
-                  {entities.map((e) => <option key={e} value={e}>{e}</option>)}
-                </select>
-                {form.origen && (
-                  <p className="flex items-center gap-1 mt-1.5 text-xs">
-                    <span className="w-1.5 h-1.5 rounded-full bg-mineral" />
-                    <span className="text-text-muted">firmando como <span className="text-mineral font-medium">{form.origen}</span></span>
-                  </p>
+                <label className="block text-xs font-semibold uppercase tracking-widest text-text-muted mb-2">
+                  {isImpostor ? 'Suplantar Entidad' : 'Entidad de Origen'}
+                </label>
+                {isImpostor ? (
+                  <>
+                    <select
+                      value={form.origen}
+                      onChange={(e) => update('origen', e.target.value)}
+                      className="w-full bg-base border border-anomaly/40 rounded-lg px-3 py-2.5 text-sm text-anomaly font-mono focus:border-anomaly focus:outline-none"
+                      required
+                    >
+                      <option value="">Seleccionar victima...</option>
+                      {entities.filter((e) => (e.name || e) !== 'impostor').map((e) => (
+                        <option key={e.name || e} value={e.name || e}>{e.display_name || e.name || e}</option>
+                      ))}
+                    </select>
+                    {form.origen && (
+                      <p className="flex items-center gap-1 mt-1.5 text-xs">
+                        <ShieldAlert className="w-3 h-3 text-anomaly" />
+                        <span className="text-anomaly">suplantando a <span className="font-medium">{form.origen}</span>, firmando con claves de impostor</span>
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="w-full bg-base border border-border-subtle rounded-lg px-3 py-2.5 text-sm text-text-primary">
+                      {user?.displayName || form.origen}
+                    </div>
+                    <p className="flex items-center gap-1 mt-1.5 text-xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-mineral" />
+                      <span className="text-text-muted">firmando como <span className="text-mineral font-medium">{user?.displayName || form.origen}</span></span>
+                    </p>
+                  </>
                 )}
               </div>
               <div>
@@ -530,7 +580,9 @@ export default function TransactionForm() {
                   required
                 >
                   <option value="">Seleccionar destino...</option>
-                  {entities.filter((e) => e !== form.origen).map((e) => <option key={e} value={e}>{e}</option>)}
+                  {entities.filter((e) => (e.name || e) !== form.origen).map((e) => (
+                    <option key={e.name || e} value={e.name || e}>{e.display_name || e.name || e}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -569,11 +621,17 @@ export default function TransactionForm() {
             disabled={submitting || !isReady}
             className={`w-full py-3 rounded-lg text-sm font-semibold transition-all duration-150 ${
               isReady
-                ? 'bg-mineral text-base cursor-pointer hover:brightness-110 active:scale-[0.97] shadow-card hover:shadow-glow-mineral'
+                ? isImpostor
+                  ? 'bg-anomaly text-base cursor-pointer hover:brightness-110 active:scale-[0.97] shadow-card'
+                  : 'bg-mineral text-base cursor-pointer hover:brightness-110 active:scale-[0.97] shadow-card hover:shadow-glow-mineral'
                 : 'bg-surface-bright text-text-muted cursor-not-allowed'
             } disabled:opacity-50`}
           >
-            {submitting ? 'Firmando y enviando...' : isReady ? 'Firmar y Enviar al Pool' : 'Completa todos los campos'}
+            {submitting
+              ? 'Firmando y enviando...'
+              : isReady
+                ? isImpostor ? 'Intentar Falsificar Transaccion' : 'Firmar y Enviar al Pool'
+                : 'Completa todos los campos'}
           </button>
         </form>
       </div>
@@ -617,7 +675,7 @@ export default function TransactionForm() {
             ) : (
               <div className="space-y-3">
                 {submissions.map((s, i) => (
-                  <TxTracker key={s.lotId + s.submittedAt} tx={s.tx} lotId={s.lotId} />
+                  <TxTracker key={s.lotId + s.submittedAt} tx={s.tx} lotId={s.lotId} onStatusChange={i === 0 ? setLastTxStatus : undefined} />
                 ))}
               </div>
             )}

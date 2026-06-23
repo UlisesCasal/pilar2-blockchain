@@ -10,14 +10,17 @@ const logger = createLogger('coordinator');
 const { buildPayload, buildBlock } = require('../shared/block');
 const { md5 } = require('../shared/hash');
 const { storeBlock, getChain, getBlock, acquireLock, getTransactionsByLot } = require('./redis');
-const { listEntities, getPrivateKey } = require('../shared/entity-keys');
 const { signTransaction } = require('../shared/crypto');
+const { initDB, getEntityWithKey, listAllEntities } = require('./db');
+const authRoutes = require('./auth-routes');
+const { requireAuth } = require('./auth-middleware');
 const { publishTask, consumeResults, consumeDLQ, getChannel, publishBlockConfirmed, QUEUES } = require('./rabbitmq');
 const { LeaderElection } = require('./leader-election');
 const { split } = require('../pool/nonce-splitter');
 
 const app = express();
 app.use(express.json());
+app.use('/auth', authRoutes);
 
 let election = null;
 let _consumerTag = null;
@@ -216,19 +219,19 @@ app.get('/chain/:blockHash', async (req, res) => {
 });
 
 app.get('/entities', (_req, res) => {
-  res.json(listEntities());
+  res.json(listAllEntities());
 });
 
-app.post('/sign', (req, res) => {
-  const { entity, transaction } = req.body;
-  if (!entity || !transaction) {
-    return res.status(400).json({ error: 'entity and transaction required' });
+app.post('/sign', requireAuth, (req, res) => {
+  const { transaction } = req.body;
+  if (!transaction) {
+    return res.status(400).json({ error: 'transaction required' });
   }
-  const privateKey = getPrivateKey(entity);
-  if (!privateKey) {
-    return res.status(404).json({ error: `Unknown entity: ${entity}` });
+  const entityRow = getEntityWithKey(req.entity.name);
+  if (!entityRow) {
+    return res.status(404).json({ error: `Unknown entity: ${req.entity.name}` });
   }
-  const firma = signTransaction(transaction, privateKey);
+  const firma = signTransaction(transaction, entityRow.private_key);
   res.json({ ...transaction, firma });
 });
 
@@ -236,6 +239,8 @@ app.post('/sign', (req, res) => {
 
 async function start() {
   try {
+    initDB();
+
     // Initialize genesis block if chain is empty
     const chain = await getChain();
     if (chain.length === 0) {
