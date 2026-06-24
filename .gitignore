@@ -5,3 +5,16 @@ coverage/
 logs/
 frontend/dist
 data/*.db
+# Ignorar carpetas locales con binarios de Terraform
+**/.terraform/
+
+# Ignorar archivos de estado (¡Tienen secretos en texto plano!)
+*.tfstate
+*.tfstate.*
+
+# Ignorar logs de errores
+crash.log
+
+# Ignorar variables que puedan contener contraseñas
+*.tfvars
+*.tfvars.json

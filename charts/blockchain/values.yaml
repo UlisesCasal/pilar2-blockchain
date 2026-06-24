@@ -1,0 +1,34 @@
+# Default values for blockchain Helm chart
+replicaCount: 1
+
+image:
+  repository: gcr.io/proyectosdypp2026/pilar2-blockchain
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+frontend:
+  image:
+    repository: gcr.io/proyectosdypp2026/pilar2-frontend
+    tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 3000
+
+rabbitmq:
+  url: "amqp://guest:guest@rabbitmq:5672"
+
+redis:
+  url: "redis://redis:6379"
+
+difficulty: "0000"
+
+pool:
+  url: "http://pool:3001"
+
+logLevel: "info"
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "blockchain.fullname" . }}-validator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: validator
+  template:
+    metadata:
+      labels:
+        app: validator
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: app-pool
+      containers:
+        - name: validator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          env:
+            - name: SERVICE
+              value: "validator"
+          ports:
+            - containerPort: 3003
+          livenessProbe:
+            tcpSocket:
+              port: 3003
+          readinessProbe:
+            tcpSocket:
+              port: 3003

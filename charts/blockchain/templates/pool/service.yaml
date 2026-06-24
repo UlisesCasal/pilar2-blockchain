@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "blockchain.fullname" . }}-pool-service
+spec:
+  selector:
+    app: pool
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001

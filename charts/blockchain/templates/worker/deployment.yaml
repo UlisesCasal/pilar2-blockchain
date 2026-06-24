@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "blockchain.fullname" . }}-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: app-pool
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          env:
+            - name: SERVICE
+              value: "worker"
+            - name: RABBITMQ_URL
+              value: "amqp://guest:guest@rabbitmq:5672"
+          ports:
+            - containerPort: 3002
+          livenessProbe:
+            tcpSocket:
+              port: 3002
+          readinessProbe:
+            tcpSocket:
+              port: 3002
