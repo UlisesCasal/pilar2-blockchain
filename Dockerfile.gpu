@@ -1,0 +1,30 @@
+# Stage 1: Compile CUDA binary for GTX 1050 (sm_61)
+FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
+
+COPY tpi/pilar1/Hit7/GPU/pow_gpu_range.cu /build/
+RUN nvcc -O3 -arch=sm_61 /build/pow_gpu_range.cu -o /build/pow_gpu_range
+
+# Stage 2: Runtime with Node.js
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /build/pow_gpu_range /app/gpu/pow_gpu_range
+
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+COPY shared/ ./shared/
+COPY worker/ ./worker/
+COPY entrypoint.js ./
+
+ENV SERVICE=worker
+ENV WORKER_TYPE=GPU
+ENV PILAR1_GPU_BINARY=/app/gpu/pow_gpu_range
+
+CMD ["node", "entrypoint.js"]

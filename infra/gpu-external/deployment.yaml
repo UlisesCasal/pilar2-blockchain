@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-worker
+  namespace: g-amarillo
+  labels:
+    app: gpu-worker
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gpu-worker
+  template:
+    metadata:
+      labels:
+        app: gpu-worker
+    spec:
+      containers:
+        - name: gpu-worker
+          image: ulisescasal/blockchain-gpu-worker:latest
+          env:
+            - name: SERVICE
+              value: "worker"
+            - name: WORKER_TYPE
+              value: "GPU"
+            - name: PILAR1_GPU_BINARY
+              value: "/app/gpu/pow_gpu_range"
+            - name: RABBITMQ_URL
+              value: "amqp://guest:guest@35.202.170.91:5672"
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          ports:
+            - containerPort: 3002

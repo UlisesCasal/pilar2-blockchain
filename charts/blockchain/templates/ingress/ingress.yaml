@@ -3,17 +3,21 @@ kind: Ingress
 metadata:
   name: blockchain-ingress
   annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/auth-url: "http://coordinator-service:3000/auth"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - custody-chain.darwin-consulting.online
+      secretName: custody-chain-tls
   rules:
-  - host: blockchain.local
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: frontend-service
-            port:
-              number: 80
+    - host: custody-chain.darwin-consulting.online
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "blockchain.fullname" . }}-frontend-service
+                port:
+                  number: 80
