@@ -78,6 +78,16 @@ export default function OverviewBar({ role }) {
             )}
           </div>
         ))}
+        <div className="px-5">
+          <a
+            href={import.meta.env.VITE_RABBITMQ_DASHBOARD_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs uppercase tracking-widest text-text-muted hover:text-white transition-colors"
+          >
+            RabbitMQ
+          </a>
+        </div>
       </div>
     </div>
   );

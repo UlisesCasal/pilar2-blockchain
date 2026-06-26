@@ -9,3 +9,5 @@ spec:
   ports:
     - port: 5672
       name: amqp
+    - port: 15672
+      name: management
