@@ -66,69 +66,120 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph External["🌐 Externo"]
-        ENT["Entidades Mineras\n(Mina, Planta, Refinería,\nOperador, Impostor)"]
-        USER["👤 Usuario\n(Frontend Web)"]
+        ENT["🏭 Entidades Mineras\n(Mina San Juan, Planta Neuquén,\nRefinería BB, Terminal Rosario,\nOperador Mendoza, Impostor)"]
+        USER["👤 Usuario\n(Frontend React + Vite)"]
     end
 
-    subgraph App["⛓️ Blockchain — Núcleo Distribuido"]
-        POOL["🏊 Pool de Transacciones\n· API REST /transaction\n· Valida firma y custodia\n· Buffer hasta BLOCK_THRESHOLD\n· Fragmenta en rangos de nonce"]
-        COORD["👑 Coordinator\n· Bully Election (líder/follower)\n· Consume y verifica resultados\n· Almacena bloques en Redis\n· API REST /chain, /entities"]
-        WORKERS["⛏️ Workers (N réplicas)\n· Consumen mining_tasks\n· Ejecutan PoW (CPU o GPU)\n· Envían heartbeat c/10s"]
+    subgraph Core["⛓️ Blockchain — Núcleo Distribuido"]
+        POOL["🏊 Pool de Transacciones\n📋 Administra: TX entrantes y workers\n· API REST POST /transaction\n· Valida firma Ed25519\n· Control de cadena de custodia\n· Buffer hasta BLOCK_THRESHOLD\n· Fragmenta en rangos de nonce\n· Worker registry (keepalive)"]
+        
+        NCT["👑 Coordinator (NCT)\n📋 Administra: consenso y bloques\n· LíDER activo: consume mining_results\n· LíDER: verifica PoW y storea bloque\n· LíDER: publica block_confirmed\n· FOLLOWER standby: escucha y replica\n· API REST: GET /chain, /entities"]
+
+        WORKERS["⛏️ Workers (N réplicas CPU/GPU)\n📋 Ejecutan: minería PoW\n· Consumen mining_tasks (prefetch=1)\n· Minan: CPU (Node.js) o GPU (CUDA)\n· Publican mining_results\n· Heartbeat c/10s en keepalive"]
     end
 
-    subgraph Middleware["📨 Infraestructura"]
-        RMQ["🐰 RabbitMQ\n· mining_tasks (work queue)\n· mining_results + DLQ\n· block_confirmed (fanout)\n· keepalive (TTL 30s)\n· scale_requests"]
-        RS["🗄️ Redis 7 (AOF)\n· Blockchain: chain (LIST)\n· Bloques: block:<hash> (HASH)\n· Liderazgo: leader:coordinator\n· Lock: lock:<prevHash>"]
+    subgraph Middleware["📨 Middleware — Infraestructura compartida"]
+        RMQ["🐰 RabbitMQ\n📋 Administra: mensajería async\n· mining_tasks (work queue, durable)\n· mining_results + DLX → DLQ\n· block_confirmed (fanout)\n· keepalive (TTL 30s, no durable)\n· scale_requests"]
+        RS["🗄️ Redis 7 (AOF)\n📋 Administra: estado y liderazgo\n· Blockchain: chain (LIST de hashes)\n· Bloques: block:&lt;hash&gt; (HASH)\n· leader:coordinator (EX 15, SET NX)\n· lock:&lt;prevHash&gt; (SET NX EX 30)"]
     end
 
-    subgraph Infra["☁️ Despliegue"]
-        GKE["GKE + Helm\n· app-pool: Coordinator,\n  Pool, Workers, Frontend\n· infra-pool: RabbitMQ,\n  Redis (tainted)"]
-        GPU["k3s externo\n· GPU Worker (CUDA)\n· nvidia.com/gpu:1"]
+    subgraph Deploy["☁️ Despliegue e Infraestructura Cloud"]
+        GKE["GKE + OpenTofu + Helm\n· app-pool: Pool, Coordinator, Workers, Frontend\n· infra-pool (tainted): RabbitMQ, Redis"]
+        GPU["k3s externo (namespace g-amarillo)\n· GPU Worker (CUDA sm_61, GTX 1050)\n· nvidia.com/gpu: 1 · Recreate"]
+        LB["LoadBalancer\n· RabbitMQ: 35.202.170.91:5672\n· Ingress: custody-chain.darwin-consulting.online"]
     end
 
-    %% --- Flujo de datos numerado ---
+    %% --- Flujo principal numerado (NCT.1 → NCT.4) ---
     ENT -->|"① POST /transaction"| POOL
-    USER -->|"② Web UI"| POOL
-    USER -->|"③ Consultas\n/chain, /entities"| COORD
+    USER -->|"② Frontend UI"| POOL
+    USER -->|"③ Consultas REST\n/chain, /entities, /chain/lot/"| NCT
 
-    POOL -->|"④ Publica tareas\n(cuando pool ≥ threshold)"| RMQ
-    RMQ -->|"⑤ Consume tarea\n(prefetch=1, rango de nonce)"| WORKERS
-    WORKERS -->|"⑥ Publica resultado\n(nonce encontrado)"| RMQ
-    RMQ -->|"⑦ Consume resultado\n(solo el líder)"| COORD
+    POOL -->|"④ NCT.1 → mining_tasks\n(cuando pool ≥ BLOCK_THRESHOLD)"| RMQ
+    RMQ -->|"⑤ NCT.2 → consume tarea\n(prefetch=1, rango de nonce)"| WORKERS
+    WORKERS -->|"⑥ NCT.2 → mining_results\n(nonce encontrado / NOT FOUND)"| RMQ
+    RMQ -->|"⑦ NCT.3 → consume resultado\n(solo el LÍDER)"| NCT
 
-    COORD -->|"⑧ Verifica PoW y\nstorea bloque"| RS
-    COORD -->|"⑨ block_confirmed"| RMQ
-    RMQ -->|"⑩ Libera flag\nde minería"| POOL
+    NCT -->|"⑧ NCT.3 → verifica PoW\ny storea bloque"| RS
+    NCT -->|"⑨ NCT.4 → block_confirmed\n(fanout)"| RMQ
+    RMQ -->|"⑩ Libera flag _miningInProgress\ny prepara siguiente batch"| POOL
+    RMQ -->|"⑩ Replica estado"| NCT
 
-    COORD -->|"⑪ Heartbeat de líder\n(leader:coordinator)"| RS
+    NCT -->|"⑪ Heartbeat de líder\nSET leader:coordinator EX 15"| RS
+
+    %% --- Bully Election ---
+    NCT -.->|"⚡ Bully Election\n1. Follower: detecta leader key expirada\n2. PUB election:start en Redis\n3. Responde el de mayor COORDINATOR_ID\n4. Nuevo líder: SET leader:coordinator"| RS
 
     %% --- Relaciones de despliegue ---
-    GKE -.->|"despliega"| App
+    GKE -.->|"despliega"| Core
     GKE -.->|"despliega"| Middleware
-    GPU -.->|"se conecta vía WAN\namqp://<LB>:5672"| RMQ
+    GPU -.->|"WAN amqp://<LB>:5672"| RMQ
+    LB -.-> GPU
 
     %% --- Estilo ---
     style External fill:#f0fdf4,stroke:#166534,color:#166534
-    style App fill:#faf5ff,stroke:#6b21a8,color:#6b21a8
+    style Core fill:#faf5ff,stroke:#6b21a8,color:#6b21a8
     style Middleware fill:#fff7ed,stroke:#9a3412,color:#9a3412
-    style Infra fill:#eff6ff,stroke:#1e40af,color:#1e40af
+    style Deploy fill:#eff6ff,stroke:#1e40af,color:#1e40af
 ```
 
 **Leyenda del flujo:**
 
-| Paso | Qué pasa | ¿Quién? |
-|------|----------|---------|
-| ① | Envía una transacción de custodia | Entidad Minera → Pool |
-| ② | Envía transacción desde la web | Usuario → Pool |
-| ③ | Consulta el estado de la blockchain | Usuario → Coordinator |
-| ④ | Publica tareas de minería en la cola | Pool → RabbitMQ |
-| ⑤ | Toma una tarea para minar (compitiendo) | Worker ← RabbitMQ |
-| ⑥ | Devuelve el nonce encontrado (o NOT FOUND) | Worker → RabbitMQ |
-| ⑦ | El líder consume el primer resultado válido | Coordinator ← RabbitMQ |
-| ⑧ | Almacena el bloque y actualiza la cadena | Coordinator → Redis |
-| ⑨ | Notifica a toda la red que hay un nuevo bloque | Coordinator → RabbitMQ |
-| ⑩ | Pool libera el flag y prepara el siguiente batch | Pool ← RabbitMQ |
-| ⑪ | El líder renueva su clave de liderazgo | Coordinator → Redis |
+| Paso | Fase TP | Qué pasa | ¿Quién? |
+|------|---------|----------|---------|
+| ① | — | Envía una transacción de custodia | Entidad Minera → Pool |
+| ② | — | Envía transacción desde el frontend | Usuario → Pool |
+| ③ | — | Consulta blockchain y entidades | Usuario → Coordinator |
+| ④ | NCT.1 | Publica tareas de minería en la cola | Pool → RabbitMQ |
+| ⑤ | NCT.2 | Worker toma una tarea (compitiendo, prefetch=1) | Worker ← RabbitMQ |
+| ⑥ | NCT.2 | Worker devuelve nonce encontrado (o NOT FOUND) | Worker → RabbitMQ |
+| ⑦ | NCT.3 | El LÍDER consume el primer resultado válido | Coordinator ← RabbitMQ |
+| ⑧ | NCT.3 | Líder verifica PoW, adquiere lock y storea en Redis | Coordinator → Redis |
+| ⑨ | NCT.4 | Líder notifica nuevo bloque a toda la red (fanout) | Coordinator → RabbitMQ |
+| ⑩ | NCT.4 | Pool libera flag y prepara el siguiente batch | Pool ← RabbitMQ |
+| ⑪ | — | Líder renueva su liderazgo cada 5s (TTL 15s) | Coordinator → Redis |
+
+### Roles de administración
+
+Cada componente tiene un rol claro de **quién administra qué** en el sistema:
+
+| Componente | Rol de administración |
+|---|---|
+| **Pool** | Administra las **transacciones entrantes**: las valida, controla la cadena de custodia, las bufferiza hasta el umbral, y las fragmenta en rangos de nonce para los workers. También administra el **registry de workers vivos** vía keepalive. |
+| **Coordinator (NCT)** | Administra el **consenso y la blockchain**: el líder consume resultados de minería, verifica el PoW, almacena bloques en Redis, y notifica a la red. Administra la **elección de líder** mediante el algoritmo Bully sobre Redis. |
+| **Workers** | **Ejecutan** la minería PoW. No administran — reciben órdenes (rangos de nonce) del Pool a través de RabbitMQ. |
+| **RabbitMQ** | Administra el **encolamiento y enrutamiento** de mensajes asíncronos entre todos los componentes (work queue, pub/sub fanout, dead letter, keepalive TTL). |
+| **Redis** | Administra el **estado persistente** del sistema: la blockchain (bloques + chain), el liderazgo (leader:coordinator), y los locks atómicos para evitar doble confirmación de bloques. |
+
+### Algoritmo Bully — Elección de líder
+
+El Coordinator utiliza el **algoritmo Bully** sobre Redis Pub/Sub para elegir qué réplica actúa como líder:
+
+```mermaid
+flowchart LR
+    subgraph Normal["Operación normal"]
+        L["👑 Líder"] -->|"cada 5s: SET leader:coordinator EX 15"| RK["🗄️ Redis"]
+        F1["Follower A"] -->|"cada 5s: GET leader:coordinator"| RK
+        F2["Follower B"] -->|"cada 5s: GET leader:coordinator"| RK
+        L -->|"consume"| RQ["📨 mining_results"]
+    end
+
+    subgraph Eleccion["⚠️ Caída del líder"]
+        TIMEOUT["leader:coordinator\nexpira (15s sin heartbeat)"]
+        DETECT["Follower detecta\nclave expirada"]
+        VOTE["PUB 'election:start'\nen Redis Pub/Sub"]
+        WINNER["Cada uno responde\ncon su COORDINATOR_ID\n→ Gana el de mayor ID"]
+        NEWL["Nuevo líder:\nSET leader:coordinator"]
+    end
+
+    TIMEOUT --> DETECT --> VOTE --> WINNER --> NEWL
+    NEWL -->|"empieza a consumir"| RQ
+```
+
+**Propiedades del Bully:**
+- **Split-brain prevention:** el lock atómico `SET NX EX 30` en `lock:<prevHash>` evita que dos líderes temporales confirmen el mismo bloque
+- **Failover:** < 15s desde que el líder cae hasta que otro es electo
+- **ID:** configurable vía `COORDINATOR_ID` o se deriva del hostname
+- **Implementación:** Ver [`coordinator/bully.js`](../coordinator/bully.js) para el detalle completo
 
 ---
 

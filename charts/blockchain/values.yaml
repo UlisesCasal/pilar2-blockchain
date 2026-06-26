@@ -1,5 +1,5 @@
 # Default values for blockchain Helm chart
-replicaCount: 1
+replicaCount: 3
 
 image:
   repository: gcr.io/proyectosdypp2026/pilar2-blockchain
@@ -35,11 +35,11 @@ rabbitmq:
 logLevel: "info"
 
 worker:
-  replicaCount: 1
+  replicaCount: 3
   resources:
     requests:
-      cpu: "250m"
-      memory: "256Mi"
+      cpu: "100m"
+      memory: "128Mi"
     limits:
       cpu: "2"
       memory: "1Gi"
