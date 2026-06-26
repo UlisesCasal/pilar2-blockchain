@@ -21,8 +21,14 @@ let _channel = null;
 
 async function getChannel() {
   if (!_channel) {
+    const tls = {};
+    if (process.env.RABBITMQ_CA) tls.ca = [require('fs').readFileSync(process.env.RABBITMQ_CA)];
+    if (process.env.RABBITMQ_CERT) tls.cert = require('fs').readFileSync(process.env.RABBITMQ_CERT);
+    if (process.env.RABBITMQ_KEY) tls.key = require('fs').readFileSync(process.env.RABBITMQ_KEY);
+
     const { channel } = await createChannel(
-      process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672'
+      process.env.RABBITMQ_URL || 'amqps://guest:guest@rabbitmq:5671',
+      { tls }
     );
     await channel.assertQueue(QUEUES.MINING_TASKS, { durable: true });
     await channel.assertQueue(QUEUES.MINING_RESULTS, {

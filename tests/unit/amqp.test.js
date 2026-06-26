@@ -50,4 +50,16 @@ describe('createChannel', () => {
 
     expect(amqplib.connect).toHaveBeenCalledTimes(3);
   });
+
+  // 4. Passes TLS options to amqplib.connect
+  test('passes TLS options to amqplib.connect', async () => {
+    const fakeChannel = {};
+    const fakeConnection = { createChannel: jest.fn().mockResolvedValue(fakeChannel) };
+    amqplib.connect.mockResolvedValue(fakeConnection);
+
+    const tlsOptions = { ca: ['ca.crt'], cert: 'cert.crt', key: 'key.key' };
+    await createChannel('amqps://localhost', { tls: tlsOptions, baseDelayMs: 0 });
+
+    expect(amqplib.connect).toHaveBeenCalledWith('amqps://localhost', expect.objectContaining(tlsOptions));
+  });
 });

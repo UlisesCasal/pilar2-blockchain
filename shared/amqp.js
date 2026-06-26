@@ -11,14 +11,20 @@ const logger = createLogger('amqp');
  * @param {object} [options]
  * @param {number} [options.maxRetries=6] - Maximum number of attempts
  * @param {number} [options.baseDelayMs=1000] - Initial delay in milliseconds (doubles each attempt)
+ * @param {object} [options.tls] - TLS/SSL options (ca, cert, key)
  * @returns {Promise<{ channel: object, connection: object }>}
  */
-async function createChannel(url, { maxRetries = 6, baseDelayMs = 1000 } = {}) {
+async function createChannel(url, { maxRetries = 6, baseDelayMs = 1000, tls = {} } = {}) {
   let delay = baseDelayMs;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const connection = await amqplib.connect(url);
+      const connectOptions = {};
+      if (tls.ca || tls.cert || tls.key) {
+        Object.assign(connectOptions, tls);
+      }
+      
+      const connection = await amqplib.connect(url, connectOptions);
       const channel = await connection.createChannel();
       return { channel, connection };
     } catch (err) {

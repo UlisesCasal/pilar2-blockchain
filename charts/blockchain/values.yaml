@@ -16,7 +16,7 @@ service:
   port: 3000
 
 rabbitmq:
-  url: "amqp://guest:guest@rabbitmq:5672"
+  url: "amqps://guest:guest@rabbitmq:5671"
 
 redis:
   url: "redis://redis:6379"
