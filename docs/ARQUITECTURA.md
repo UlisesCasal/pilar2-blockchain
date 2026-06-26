@@ -9,6 +9,7 @@
 ## Índice
 
 - [Visión General](#visión-general)
+- [Diagrama general de interacción](#diagrama-general-de-interacción)
 - [P1 — Validación de Transacciones y Bloques (PoW + Signature)](#p1--validación-de-transacciones-y-bloques)
 - [P2 — Distribución async de tareas de minería (RabbitMQ)](#p2--distribución-async-de-tareas-de-minería-rabbitmq)
 - [P3 — Estado blockchain, transacciones y bloques (Redis)](#p3--estado-blockchain-transacciones-y-bloques-redis)
@@ -55,6 +56,79 @@ flowchart TB
 | **CI/CD** | GitHub Actions |
 | **GPU externa** | k3s cluster (namespace `g-amarillo`) |
 | **Frontend** | React 18 + Vite 5 + Nginx |
+
+---
+
+## Diagrama general de interacción
+
+> **Vista de alto nivel:** cómo se conectan los componentes del sistema y cuál es el flujo de datos entre ellos, desde que una entidad minera envía una transacción hasta que se confirma un bloque.
+
+```mermaid
+flowchart TB
+    subgraph External["🌐 Externo"]
+        ENT["Entidades Mineras\n(Mina, Planta, Refinería,\nOperador, Impostor)"]
+        USER["👤 Usuario\n(Frontend Web)"]
+    end
+
+    subgraph App["⛓️ Blockchain — Núcleo Distribuido"]
+        POOL["🏊 Pool de Transacciones\n· API REST /transaction\n· Valida firma y custodia\n· Buffer hasta BLOCK_THRESHOLD\n· Fragmenta en rangos de nonce"]
+        COORD["👑 Coordinator\n· Bully Election (líder/follower)\n· Consume y verifica resultados\n· Almacena bloques en Redis\n· API REST /chain, /entities"]
+        WORKERS["⛏️ Workers (N réplicas)\n· Consumen mining_tasks\n· Ejecutan PoW (CPU o GPU)\n· Envían heartbeat c/10s"]
+    end
+
+    subgraph Middleware["📨 Infraestructura"]
+        RMQ["🐰 RabbitMQ\n· mining_tasks (work queue)\n· mining_results + DLQ\n· block_confirmed (fanout)\n· keepalive (TTL 30s)\n· scale_requests"]
+        RS["🗄️ Redis 7 (AOF)\n· Blockchain: chain (LIST)\n· Bloques: block:<hash> (HASH)\n· Liderazgo: leader:coordinator\n· Lock: lock:<prevHash>"]
+    end
+
+    subgraph Infra["☁️ Despliegue"]
+        GKE["GKE + Helm\n· app-pool: Coordinator,\n  Pool, Workers, Frontend\n· infra-pool: RabbitMQ,\n  Redis (tainted)"]
+        GPU["k3s externo\n· GPU Worker (CUDA)\n· nvidia.com/gpu:1"]
+    end
+
+    %% --- Flujo de datos numerado ---
+    ENT -->|"① POST /transaction"| POOL
+    USER -->|"② Web UI"| POOL
+    USER -->|"③ Consultas\n/chain, /entities"| COORD
+
+    POOL -->|"④ Publica tareas\n(cuando pool ≥ threshold)"| RMQ
+    RMQ -->|"⑤ Consume tarea\n(prefetch=1, rango de nonce)"| WORKERS
+    WORKERS -->|"⑥ Publica resultado\n(nonce encontrado)"| RMQ
+    RMQ -->|"⑦ Consume resultado\n(solo el líder)"| COORD
+
+    COORD -->|"⑧ Verifica PoW y\nstorea bloque"| RS
+    COORD -->|"⑨ block_confirmed"| RMQ
+    RMQ -->|"⑩ Libera flag\nde minería"| POOL
+
+    COORD -->|"⑪ Heartbeat de líder\n(leader:coordinator)"| RS
+
+    %% --- Relaciones de despliegue ---
+    GKE -.->|"despliega"| App
+    GKE -.->|"despliega"| Middleware
+    GPU -.->|"se conecta vía WAN\namqp://<LB>:5672"| RMQ
+
+    %% --- Estilo ---
+    style External fill:#f0fdf4,stroke:#166534,color:#166534
+    style App fill:#faf5ff,stroke:#6b21a8,color:#6b21a8
+    style Middleware fill:#fff7ed,stroke:#9a3412,color:#9a3412
+    style Infra fill:#eff6ff,stroke:#1e40af,color:#1e40af
+```
+
+**Leyenda del flujo:**
+
+| Paso | Qué pasa | ¿Quién? |
+|------|----------|---------|
+| ① | Envía una transacción de custodia | Entidad Minera → Pool |
+| ② | Envía transacción desde la web | Usuario → Pool |
+| ③ | Consulta el estado de la blockchain | Usuario → Coordinator |
+| ④ | Publica tareas de minería en la cola | Pool → RabbitMQ |
+| ⑤ | Toma una tarea para minar (compitiendo) | Worker ← RabbitMQ |
+| ⑥ | Devuelve el nonce encontrado (o NOT FOUND) | Worker → RabbitMQ |
+| ⑦ | El líder consume el primer resultado válido | Coordinator ← RabbitMQ |
+| ⑧ | Almacena el bloque y actualiza la cadena | Coordinator → Redis |
+| ⑨ | Notifica a toda la red que hay un nuevo bloque | Coordinator → RabbitMQ |
+| ⑩ | Pool libera el flag y prepara el siguiente batch | Pool ← RabbitMQ |
+| ⑪ | El líder renueva su clave de liderazgo | Coordinator → Redis |
 
 ---
 

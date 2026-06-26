@@ -30,6 +30,7 @@ const PORT = parseInt(process.env.PORT_COORDINATOR || '3000');
 const DIFFICULTY = process.env.DIFFICULTY || '0000';
 const POOL_URL = process.env.POOL_URL || 'http://pool:3001';
 const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://guest:guest@rabbitmq:5672';
+const RABBITMQ_DASHBOARD_URL = process.env.RABBITMQ_DASHBOARD_URL || 'http://localhost:15672';
 
 // --- NCT Result Handler ---
 
@@ -182,11 +183,13 @@ app.get('/rabbitmq/status', async (_req, res) => {
     res.json({
       rabbitmq: 'OK',
       queue_depth: q.messageCount,
+      dashboard_url: RABBITMQ_DASHBOARD_URL,
     });
   } catch (err) {
     res.json({
       rabbitmq: 'ERROR',
       queue_depth: 0,
+      dashboard_url: RABBITMQ_DASHBOARD_URL,
       error: err.message,
     });
   }

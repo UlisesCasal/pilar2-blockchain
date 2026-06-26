@@ -22,6 +22,10 @@ spec:
               value: "pool"
             - name: RABBITMQ_URL
               value: "amqp://guest:guest@rabbitmq:5672"
+            - name: BLOCK_THRESHOLD
+              value: {{ .Values.pool.blockThreshold | default 5 | quote }}
+            - name: DIFFICULTY
+              value: {{ .Values.difficulty | default "0000" | quote }}
           ports:
             - containerPort: 3001
           livenessProbe:

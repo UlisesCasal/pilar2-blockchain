@@ -5,6 +5,7 @@ import RingChart from './RingChart';
 export default function OverviewBar({ role }) {
   const { data: status } = usePolling(api.getStatus);
   const { data: pool } = usePolling(api.getPoolStatus);
+  const { data: rabbit } = usePolling(api.getRabbitStatus);
 
   const poolPending = pool?.pending ?? 0;
   const poolThreshold = pool?.threshold ?? 10;
@@ -80,7 +81,7 @@ export default function OverviewBar({ role }) {
         ))}
         <div className="px-5">
           <a
-            href={import.meta.env.VITE_RABBITMQ_DASHBOARD_URL || 'http://localhost:15672'}
+            href={rabbit?.dashboard_url || 'http://localhost:15672'}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs uppercase tracking-widest text-text-muted hover:text-white transition-colors"

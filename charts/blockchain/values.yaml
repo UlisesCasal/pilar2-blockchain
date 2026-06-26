@@ -25,22 +25,28 @@ difficulty: "0000"
 
 pool:
   url: "http://pool:3001"
+  blockThreshold: 5
+
+rabbitmq:
+  url: "amqps://guest:guest@rabbitmq:5671"
+  dashboardUrl: "http://34.10.131.154:15672"
+  # ⚠️ Si Rabbitmq cambia de IP por recrear el cluster, actualizar dashboardUrl acá y hacer helm upgrade
 
 logLevel: "info"
 
 worker:
-  replicaCount: 2
+  replicaCount: 1
   resources:
     requests:
       cpu: "250m"
       memory: "256Mi"
     limits:
-      cpu: "500m"
-      memory: "512Mi"
+      cpu: "2"
+      memory: "1Gi"
   hpa:
-    enabled: true
+    enabled: false
     minReplicas: 1
-    maxReplicas: 10
+    maxReplicas: 1
     targetCPUUtilizationPercentage: 70
 
 resources: {}
