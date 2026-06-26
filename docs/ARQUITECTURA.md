@@ -1,467 +1,502 @@
-# Arquitectura — Pilar 2: Blockchain de Custodia de Minerales
+# Pilar 2 — Infraestructura de servicios distribuidos para una blockchain escalable
 
-> Sistema distribuido de cadena de custodia para minerales, con minería Proof of Work,
-> coordinación tolerante a fallos mediante elección de líder (Bully), y workers heterogéneos (CPU + GPU).
+> **Materia:** Sistemas Distribuidos y Programación Paralela — UNLu DCB  
+> **Docente:** Dr. David Petrocelli  
+> **Repositorio:** [Pilar 2 — Blockchain de Custodia de Minerales](https://github.com/ulisescasal/Pilar2)
 
 ---
 
 ## Índice
 
-1. [Visión General del Sistema](#1-visión-general-del-sistema)
-2. [Componentes y Responsabilidades](#2-componentes-y-responsabilidades)
-3. [Infraestructura de Mensajería (RabbitMQ / AMQP)](#3-infraestructura-de-mensajería-rabbitmq--amqp)
-4. [Persistencia (Redis + SQLite)](#4-persistencia-redis--sqlite)
-5. [Flujo de Datos Extremo a Extremo](#5-flujo-de-datos-extremo-a-extremo)
-6. [Mecanismo de Consenso: Proof of Work](#6-mecanismo-de-consenso-proof-of-work)
-7. [Tolerancia a Fallos: Algoritmo Bully](#7-tolerancia-a-fallos-algoritmo-bully)
-8. [Modelo de Autenticación y Autorización](#8-modelo-de-autenticación-y-autorización)
-9. [Cadena de Custodia](#9-cadena-de-custodia)
-10. [Despliegue Local (Docker Compose)](#10-despliegue-local-docker-compose)
-11. [Despliegue en Producción (GKE + Helm)](#11-despliegue-en-producción-gke--helm)
-12. [Cluster GPU Externo (k3s)](#12-cluster-gpu-externo-k3s)
-13. [Frontend Web (React + Vite + Nginx)](#13-frontend-web-react--vite--nginx)
-14. [Pipeline CI/CD](#14-pipeline-cicd)
-15. [Variables de Entorno](#15-variables-de-entorno)
-16. [Diagrama de Arquitectura ASCII](#16-diagrama-de-arquitectura-completo)
+- [Visión General](#visión-general)
+- [P1 — Validación de Transacciones y Bloques (PoW + Signature)](#p1--validación-de-transacciones-y-bloques)
+- [P2 — Distribución async de tareas de minería (RabbitMQ)](#p2--distribución-async-de-tareas-de-minería-rabbitmq)
+- [P3 — Estado blockchain, transacciones y bloques (Redis)](#p3--estado-blockchain-transacciones-y-bloques-redis)
+- [P4 — Nodo coordinador de tareas (NCT)](#p4--nodo-coordinador-de-tareas-nct)
+- [P5 — Pool de Transacciones](#p5--pool-de-transacciones)
+- [Diagrama general de la arquitectura](#diagrama-general-de-la-arquitectura)
+- [Despliegue e Infraestructura](#despliegue-e-infraestructura)
+- [Variables de Entorno](#variables-de-entorno)
 
 ---
 
-## 1. Visión General del Sistema
+## Visión General
 
-**Pilar 2** es una blockchain privada para trazabilidad de minerales a lo largo de la cadena de suministro. Cada transacción representa la transferencia de custodia de un lote de mineral entre entidades de la industria minera argentina.
+**Pilar 2** es una blockchain privada para la trazabilidad de minerales a lo largo de la cadena de suministro minera argentina. Cada transacción representa la transferencia de custodia de un lote de mineral entre entidades reales del dominio.
 
-### Entidades del Dominio
+```mermaid
+flowchart TB
+    subgraph Dominio["🏭 Dominio Minero"]
+        ENT1["Mina San Juan"] -->|"extrae CRUDO"| ENT2["Planta Neuquén"]
+        ENT2 -->|"procesa a MINERAL"| ENT3["Refinería Bahía Blanca"]
+        ENT3 -->|"refina"| ENT4["Terminal Puerto Rosario"]
+        ENT4 -->|"distribuye"| ENT1
+        ENT5["Operador Pozo Mendoza"]
+        ENT6["⚠️ Impostor (test)"]
+    end
+```
 
-| Entidad | Rol |
-|---|---|
-| Mina San Juan | Origen — extrae mineral CRUDO |
-| Planta Neuquén | Procesa CRUDO → MINERAL |
-| Refinería Bahía Blanca | Refina MINERAL |
-| Terminal Puerto Rosario | Distribuye producto terminado |
-| Operador Pozo Mendoza | Operador logístico |
-| Impostor | Entidad de prueba (firma inválida) |
-
-### Stack Tecnológico
+### Stack tecnológico
 
 | Capa | Tecnología |
 |---|---|
-| Lenguaje | Node.js 20 (Alpine) |
-| Framework web | Express.js |
-| Mensajería | RabbitMQ 3.x (AMQP 0-9-1) |
-| Base de datos en memoria | Redis 7 (AOF persistente) |
-| Base de datos SQL | SQLite (better-sqlite3) |
-| Autenticación | JWT + bcrypt |
-| Minería PoW | MD5 + nonce |
-| Minero CPU | Node.js (range scan) |
-| Minero GPU | CUDA C++ (NVIDIA, sm_61) |
-| Frontend | React 18 + Vite 5 + Nginx |
-| Container | Docker + Docker Compose |
-| Orquestación | Kubernetes (GKE) + Helm |
-| CI/CD | GitHub Actions |
-| Infraestructura | OpenTofu (Terraform) |
-| GPU externa | k3s cluster independiente |
+| **Runtime** | Node.js 20 (Alpine Linux) |
+| **API** | Express.js |
+| **Mensajería asíncrona** | RabbitMQ 3.x (AMQP 0-9-1) |
+| **Base de datos en memoria** | Redis 7 (AOF persistente) |
+| **Base de datos SQL** | SQLite (better-sqlite3) |
+| **Autenticación** | JWT + bcrypt |
+| **Minero CPU** | Node.js — `pow_cpu_range.js` |
+| **Minero GPU** | CUDA C++ — `pow_gpu_range.cu` (sm_61) |
+| **Hashing** | MD5 |
+| **Contenedores** | Docker + Docker Compose |
+| **Orquestación** | Kubernetes (GKE) + Helm |
+| **Infraestructura** | OpenTofu (Terraform) |
+| **CI/CD** | GitHub Actions |
+| **GPU externa** | k3s cluster (namespace `g-amarillo`) |
+| **Frontend** | React 18 + Vite 5 + Nginx |
 
 ---
 
-## 2. Componentes y Responsabilidades
+## P1 — Validación de Transacciones y Bloques
 
-### 2.1 Coordinator (`coordinator/`)
+> **Correspondencia TP:** *"Minero en CUDA (realizado en Pilar 1) para resolver tareas de PoW... Este algoritmo debe recibir parámetros para incrementar la complejidad de las tareas (manejado por el nodo coordinador)."*
 
-**Propósito**: Nodo central que mantiene la blockchain, coordina la minería y verifica resultados.
+### Componentes
 
-**Responsabilidades**:
-- Mantener el estado de la blockchain en Redis
-- Recibir solicitudes de minería del Pool y publicar tareas en RabbitMQ
-- **Solo el líder** consume resultados de minería de `mining_results` y confirma bloques
-- Verificar que el nonce cumple con la dificultad configurada (`md5(payload + nonce).startsWith(difficulty)`)
-- Almacenar bloques confirmados en Redis
-- Publicar eventos de bloque confirmado en el exchange fanout `block_confirmed`
-- Proveer endpoints HTTP para consultar la chain, lotes, entidades y estado
-- Firmar transacciones con clave privada de la entidad autenticada por JWT
-- Responder a verificaciones de custodia (Pool consulta `GET /chain/lot/:lotId`)
+- `validator/index.js` — lógica de validación (reutilizada como librería)
+- `validator/server.js` — microservicio HTTP (no utilizado en pipeline activo)
+- `worker/miner.js` — ejecutor del binario PoW (CPU o GPU)
+- `shared/crypto.js` — firma y verificación Ed25519
+- `shared/schema.js` — esquema de transacción
 
-**Endpoints HTTP**:
+### 1.1 Validación de Transacciones
 
-| Método | Ruta | Propósito | Auth |
-|---|---|---|---|
-| POST | `/mine` | Iniciar minería (lo llama el Pool) | No |
-| POST | `/transaction` | Proxy a Pool | No |
-| GET | `/status` | Health + rol (leader/follower) + longitud chain | No |
-| GET | `/redis/status` | Estado de Redis | No |
-| GET | `/rabbitmq/status` | Profundidad de cola mining_tasks | No |
-| GET | `/chain` | Blockchain completa | No |
-| GET | `/chain/:blockHash` | Bloque individual | No |
-| GET | `/chain/lot/:lotId` | Transacciones por lote | No |
-| GET | `/entities` | Listar entidades | No |
-| POST | `/sign` | Firmar transacción con clave de entidad | JWT |
-| POST | `/auth/login` | Login entidad → JWT | No |
-| GET | `/auth/me` | Entidad desde token | JWT |
+Toda transacción debe cumplir las siguientes reglas, ejecutadas por `validateTransaction()`:
 
-**Arranque**:
-1. `initDB()` → crear SQLite con entidades y claves
-2. Si chain vacía → crear bloque génesis: `md5('genesis')`
-3. Crear `LeaderElection` (Bully algorithm)
-4. Al ser electo → empezar a consumir `mining_results`
-5. Al ser destituido → cancelar consumer
-6. `consumeDLQ()` → loguear mensajes muertos
-7. Iniciar Express en puerto 3000
+```mermaid
+flowchart LR
+    TX["Transacción\nentrante"] --> CHECK["checkTransaction()"]
+    CHECK --> F1["¿8 campos requeridos?\nid, id_lote, origen, destino,\ncantidad, tipo, timestamp, firma"]
+    CHECK --> F2["¿cantidad > 0?"]
+    CHECK --> F3["¿tipo ∈ [MINERAL, CRUDO]?"]
+    CHECK --> F4["¿origen ≠ destino?"]
+    CHECK --> F5["¿firma Ed25519 válida?\no __unsigned__ (testing)"]
+    F1 -->|"✅"| PASS["Pasa validación"]
+    F2 -->|"✅"| PASS
+    F3 -->|"✅"| PASS
+    F4 -->|"✅"| PASS
+    F5 -->|"✅"| PASS
+    F1 -->|"❌"| REJECT["400 Bad Request"]
+    F2 -->|"❌"| REJECT
+    F3 -->|"❌"| REJECT
+    F4 -->|"❌"| REJECT
+    F5 -->|"❌"| REJECT
+```
 
-### 2.2 Pool (`pool/`)
+**Campos requeridos:**
 
-**Propósito**: Gateway de transacciones — recibe, valida, acumula y gatilla minería.
+```json
+{
+  "id": "tx-001",
+  "id_lote": "LOTE-STRESS-k3x8f-1",
+  "origen": "mina-san-juan",
+  "destino": "planta-neuquen",
+  "cantidad": 100,
+  "tipo": "CRUDO",
+  "timestamp": "2026-06-26T12:00:00.000Z",
+  "firma": "MEUCIQDVW0z..."
+}
+```
 
-**Responsabilidades**:
-- Validar transacciones entrantes (esquema + firma Ed25519)
-- Verificar cadena de custodia contra la chain confirmada (consultando Coordinator) y contra el pool pendiente
-- Acumular transacciones en un pool en memoria hasta alcanzar `BLOCK_THRESHOLD`
-- Al alcanzar threshold: flushear el batch, construir payload canónico, dividir espacio de nonces, publicar tareas en `mining_tasks`
-- Registrar workers vivos mediante keepalive queue (TTL 30s)
-- Si no hay workers activos: publicar en `scale_requests`
-- Auto-gatillar minería cuando un worker se reconecta y hay txs pendientes
-- Suscribirse a `block_confirmed` para limpiar flag `_miningInProgress` y gatillar siguiente bloque
+### 1.2 Firma Digital Ed25519
 
-**Endpoints HTTP**:
+La firma se calcula sobre una representación canónica que excluye el campo `firma`:
 
-| Método | Ruta | Propósito |
+```javascript
+// Campos que se firman (EN ESTE ORDEN):
+const canonical = JSON.stringify({
+  id, id_lote, origen, destino, cantidad, tipo, timestamp
+  // firma NO se incluye
+});
+
+// Firma: crypto.sign(null, data, privateKey)
+// Verificación: crypto.verify(null, data, publicKey, signature)
+```
+
+**Entidades y sus claves:**
+
+| Entidad | Clave privada | Clave pública |
 |---|---|---|
-| POST | `/transaction` | Recibir transacción → validar → custody check → pool → minar si threshold |
-| GET | `/pending` | Transacciones pendientes |
-| GET | `/pending/lot/:lotId` | Pendientes filtradas por lote |
-| POST | `/mine` | Forzar minería inmediata |
-| GET | `/status` | Health + conteo workers GPU/CPU |
-| GET | `/scale/status` | Info de escalado |
+| `mina-san-juan` | `keys/mina-san-juan.pem` | `keys/mina-san-juan.pub.pem` |
+| `planta-neuquen` | `keys/planta-neuquen.pem` | `keys/planta-neuquen.pub.pem` |
+| `refineria-bahia-blanca` | `keys/refineria-bahia-blanca.pem` | `keys/refineria-bahia-blanca.pub.pem` |
+| `terminal-puerto-rosario` | `keys/terminal-puerto-rosario.pem` | `keys/terminal-puerto-rosario.pub.pem` |
+| `operador-pozo-mendoza` | `keys/operador-pozo-mendoza.pem` | `keys/operador-pozo-mendoza.pub.pem` |
+| `impostor` | `keys/impostor.pem` | `keys/impostor.pub.pem` |
 
-**Lógica de custody check**:
-```
-1. pool.findByLot(lotId) → si hay pendientes, último.destino debe coincidir con tx.origen
-2. GET /chain/lot/:lotId → si hay en chain, último.destino debe coincidir con tx.origen
-3. Si no hay registros → ok (primera transacción del lote)
-```
+**Sentinel de testing:** Cuando `firma: "__unsigned__"`, se salta la verificación criptográfica. Esto permite ejecutar pruebas de estrés sin necesidad de firmar cada transacción.
 
-### 2.3 Worker (`worker/`)
+### 1.3 Proof of Work (PoW)
 
-**Propósito**: Consumir tareas de minería y ejecutar Proof of Work.
+El mecanismo de consenso utiliza MD5 con un nonce. El payload canónico se construye según la cantidad de transacciones:
 
-**Responsabilidades**:
-- Consumir mensajes de `mining_tasks` con `prefetch(1)` (un task a la vez)
-- Ejecutar minero PoW: CPU (Node.js) o GPU (CUDA C++ compilado)
-- Publicar resultado en `mining_results` con nonce encontrado (o `found: false`)
-- Enviar heartbeat keepalive cada 10s a cola `keepalive`
-- Exponer endpoint `/worker/status` para liveness
-
-**Endpoints HTTP**:
-
-| Método | Ruta | Propósito |
+| Caso | Formato | Ejemplo |
 |---|---|---|
-| GET | `/worker/status` | Health + worker_id + type + hash_rate |
+| 1 transacción | `<id_lote>:<origen>-><destino>:<cantidad>tn:<prevHash>` | `LOTE-001:mina-san-juan->planta-neuquen:100tn:0000...` |
+| Múltiples txs | `<ids-ordenados-csv>:<prevHash>` | `tx-001,tx-002,tx-003:0000...` |
 
-### 2.4 Validator (`validator/`)
-
-**Propósito**: Módulo de validación de transacciones (desacoplado como servicio HTTP).
-
-**Responsabilidades**:
-- Validar que todos los 8 campos requeridos (`id`, `id_lote`, `origen`, `destino`, `cantidad`, `tipo`, `timestamp`, `firma`) estén presentes
-- Validar que `cantidad > 0`
-- Validar que `tipo` sea `MINERAL` o `CRUDO`
-- Validar que `origen !== destino`
-- Verificar firma Ed25519 contra la clave pública de la entidad origen (salvo sentinel `__unsigned__`)
-
-**NOTA**: El Validator existe como servicio standalone pero en la práctica `pool/index.js` importa `validateTransaction` directamente, sin llamar al microservicio.
-
----
-
-## 3. Infraestructura de Mensajería (RabbitMQ / AMQP)
-
-### 3.1 Conexión
-
-- Protocolo: AMQP 0-9-1
-- URL por defecto: `amqp://guest:guest@rabbitmq:5672`
-- En producción (TLS): `amqps://guest:guest@rabbitmq:5671`
-- Reconexión con backoff exponencial: 1s → 2s → 4s → 8s → 16s → 32s (6 intentos)
-- Soporte TLS vía `RABBITMQ_CA`, `RABBITMQ_CERT`, `RABBITMQ_KEY`
-
-### 3.2 Colas
-
-| Cola | Tipo | Durable | TTL | DLX | Prefetch | Declarada por | Producen | Consumen |
-|---|---|---|---|---|---|---|---|---|
-| `mining_tasks` | Work Queue (Competing Consumers) | ✅ Sí | — | — | 1 | Coordinator, Pool, Worker | Pool, Coordinator | Workers |
-| `mining_results` | Work Queue | ✅ Sí | — | `dlx_mining` | 1 | Coordinator, Worker | Workers | Coordinator (solo líder) |
-| `mining_results_dlq` | Dead Letter Queue | ✅ Sí | — | — | — | Coordinator | — | Coordinator (solo logging) |
-| `keepalive` | No durable | ❌ No | 30s | — | — | Coordinator, Pool, Worker | Workers | Pool |
-| `scale_requests` | Durable | ✅ Sí | — | — | — | Pool | Pool | — (preparado para KEDA) |
-
-### 3.3 Exchanges
-
-| Exchange | Tipo | Durable | Declarado por | Bindings |
-|---|---|---|---|---|
-| `block_confirmed` | `fanout` | ❌ No | Coordinator, shared/amqp.js | Cada subscriber tiene cola exclusiva |
-| `dlx_mining` | `direct` | ✅ Sí | Coordinator | `mining_results_dlq` binding sin routing key |
-
-### 3.4 Patrones de Mensajería
-
-#### Patrón 1: Work Queue / Competirng Consumers — mining_tasks
-
-```
-Pool ──PUBLISH──► mining_tasks ──CONSUME──► Worker 1
-                  (durable)      ├──CONSUME──► Worker 2
-                                 └──CONSUME──► Worker N
-```
-
-- Pool publica N tareas (una por rango de nonce)
-- Workers consumen con `prefetch(1)` — cada worker toma una tarea a la vez
-- Mensajes persistentes (sobreviven reinicios de RabbitMQ)
-- ACK explícito: worker confirma solo después de publicar resultado
-
-#### Patrón 2: Work Queue + DLX — mining_results
-
-```
-Worker ──PUBLISH──► mining_results ──CONSUME──► Coordinator (líder)
-                   (DLX → dlx_mining)
-                             │
-                     nack sin requeue
-                             ▼
-                   mining_results_dlq ──CONSUME──► Coordinator (logging)
-```
-
-- Solo el líder consume de `mining_results`
-- Si el handler falla (excepción), la cola envía el mensaje al DLX automáticamente
-- El DLX lo redirige a `mining_results_dlq` para inspección
-
-#### Patrón 3: Fanout / Pub-Sub — block_confirmed
-
-```
-Coordinator ──PUBLISH──► block_confirmed (fanout)
-                               │
-               ┌───────────────┼───────────────┐
-               ▼               ▼               ▼
-           Pool (sub)   Coord Follower    Coord Follower
-           - flag=false   - notificación   - notificación
-           - ¿más txs?    de consistencia  de consistencia
-```
-
-- Cada subscriber crea su propia cola exclusiva (`assertQueue('', { exclusive: true })`)
-- Pool usa esto para saber cuándo liberar `_miningInProgress` y gatillar el siguiente bloque
-- Followers coordinators reciben la notificación por consistencia de caché
-
-#### Patrón 4: Keepalive (TTL-based)
-
-```
-Worker ──PUBLISH (c/10s)──► keepalive ──CONSUME──► Pool
-                            TTL=30s
-```
-
-- Cola no durable: si RabbitMQ se reinicia, los keepalives se pierden (aceptable)
-- TTL=30s: si un worker no envía heartbeat por 30s, su mensaje expira y es descartado
-- Pool registra worker con timestamp y evicta si `lastSeen + TTL < now`
-- Cuando `registry.count()` pasa de 0 a >0 con txs pendientes → auto-minería
-
----
-
-## 4. Persistencia (Redis + SQLite)
-
-### 4.1 Redis — Blockchain
-
-**Propósito**: Almacenar la blockchain y locks atómicos.
-
-| Key Pattern | Tipo | Comando | TTL | Propósito |
-|---|---|---|---|---|
-| `block:<block_hash>` | Hash | `HSET` | — | Datos del bloque (5 campos) |
-| `chain` | List | `RPUSH` / `LRANGE` | — | Hashes ordenados de bloques |
-| `leader:coordinator` | String | `SET EX` / `GET` | 15s | ID del líder actual |
-| `lock:<prevHash>` | String | `SET NX EX` | 30s | Lock atómico de commit |
-
-**Estructura de un bloque en Redis**:
-```
-HSET block:000048980b98addc5dbd60dc56ccceb6 \
-  previous_hash "00000000000000000000000000000000" \
-  nonce "0" \
-  timestamp "2026-06-26T..." \
-  transactions "[]" \
-  block_hash "000048980b98addc5dbd60dc56ccceb6"
-
-RPUSH chain 000048980b98addc5dbd60dc56ccceb6
-```
-
-**Lock atómico de commit** (previene doble escritura del mismo bloque):
-```
-SET lock:<prevHash> 1 NX EX 30
-```
-- `NX`: solo si no existe (primero en llegar gana)
-- `EX 30`: expira en 30s (si el líder falla, el lock se libera solo)
-- Si `lock < 0` (no adquirido): otro worker ya confirmó este bloque, descartar resultado
-
-**Persistencia**: Redis con AOF (Append Only File) — `redis-server --appendonly yes`
-
-### 4.2 SQLite — Autenticación
-
-**Propósito**: Almacenar entidades, claves y contraseñas.
-
-**Schema**:
-```sql
-CREATE TABLE entities (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  name          TEXT UNIQUE NOT NULL,        -- e.g. 'mina-san-juan'
-  display_name  TEXT NOT NULL,               -- e.g. 'Mina San Juan'
-  password_hash TEXT NOT NULL,               -- bcrypt de 'admin123'
-  public_key    TEXT NOT NULL,               -- PEM Ed25519
-  private_key   TEXT NOT NULL                -- PEM Ed25519
-);
-```
-
-**Archivo**: `./data/auth.db` (configurable vía `DB_PATH`)
-
-**Entidades seed** (6):
-- mina-san-juan, planta-neuquen, refineria-bahia-blanca
-- operador-pozo-mendoza, terminal-puerto-rosario, impostor
-- Password por defecto: `admin123` (bcrypt, 10 rounds)
-
----
-
-## 5. Flujo de Datos Extremo a Extremo
-
-### 5.1 Envío de Transacción
-
-```
-Cliente/Frontend/Stress Test
-  │
-  ▼
-POST /transaction ───► Pool (puerto 3001)
-  │
-  ├── (1) validateTransaction(tx)
-  │       ├── ¿8 campos requeridos? (incluyendo firma)
-  │       ├── ¿cantidad > 0?
-  │       ├── ¿tipo in [MINERAL, CRUDO]?
-  │       ├── ¿origen !== destino?
-  │       └── ¿firma Ed25519 válida? (salvo '__unsigned__')
-  │
-  ├── (2) checkCustody(tx)
-  │       ├── pool.findByLot(lotId) → último.destino === tx.origen?
-  │       └── GET /chain/lot/:lotId (Coordinator) → último.destino === tx.origen?
-  │       └── Si no → 403 Forbidden
-  │
-  ├── (3) pool.add(tx) → acumular en memoria
-  │
-  └── (4) ¿pool.size() >= BLOCK_THRESHOLD?
-          ├── pool.flush() → batch de transacciones
-          ├── GET /status (Coordinator) → obtener prevHash
-          ├── split(workerCount) → dividir [0, MAX_SAFE_INTEGER] en N rangos
-          ├── buildPayload(batch, prevHash) → string canónico
-          └── Por cada rango:
-                publish a mining_tasks {
-                  task_id: uuid,
-                  payload: "LOTE-001:mina->planta:100tn:0000...",
-                  prev_hash: "0000...",
-                  difficulty: "0000",
-                  nonce_start: 0,
-                  nonce_end: 4503599627370495,
-                  transactions: [...]
-                }
-```
-
-### 5.2 Minería
-
-```
-Worker consume mining_tasks (prefetch=1)
-  │
-  ├── CPU Worker:
-  │     spawn node pow_cpu_range.js <payload> <difficulty> <start> <end>
-  │     └── stdout: "Nonce: 12345\nHash: 0000abc..."
-  │
-  └── GPU Worker:
-        spawn ./pow_gpu_range <payload> <difficulty> <start> <end>
-        └── stdout: "Nonce: 67890\nHash: 0000def..."
-  
-  └── publish a mining_results {
-        task_id, worker_id,
-        found: true/false,
-        nonce: "12345",
-        hash: "0000abc...",
-        payload, prev_hash, difficulty,
-        transactions
-      }
-  
-  └── ACK mensaje original de mining_tasks
-```
-
-### 5.3 Confirmación de Bloque (solo líder)
-
-```
-Coordinator LÍDER consume mining_results
-  │
-  ├── (NCT.2) ¿found === false? → descartar
-  │
-  ├── (NCT.3) acquireLock(prevHash)
-  │       SET lock:<prevHash> 1 NX EX 30
-  │       └── ¿false? → otro worker ganó, descartar
-  │
-  ├── (NCT.4) Verificar PoW
-  │       md5(payload + nonce).startsWith(difficulty)
-  │       └── ¿false? → nonce inválido, descartar
-  │
-  ├── buildBlock(task, nonce, hash) → objeto bloque
-  │
-  ├── storeBlock(block)
-  │       HSET block:<hash> ...
-  │       RPUSH chain <hash>
-  │
-  ├── publishBlockConfirmed(block)
-  │       publish a block_confirmed (fanout)
-  │
-  └── Log "Block committed: 0000abc..."
-```
-
-### 5.4 Post-Confirmación
-
-```
-block_confirmed ──fanout──► Pool
-                              │
-                              ├── _miningInProgress = false
-                              └── ¿pool aún tiene txs >= threshold?
-                                    └── triggerMining(batch) → nuevo bloque
-
-block_confirmed ──fanout──► Coordinator follower
-                              └── notificación de nuevo bloque (consistencia)
-
-Worker (separado):
-  ──PUBLISH cada 10s──► keepalive ──CONSUME──► Pool
-                                                └── registry.register(worker_id, type)
-```
-
----
-
-## 6. Mecanismo de Consenso: Proof of Work
-
-### 6.1 Payload Canónico
-
-**Transacción única**:
-```
-<id_lote>:<origen>-><destino>:<cantidad>tn:<prevHash>
-Ej: "LOTE-2026-MIN-001:mina-san-juan->planta-neuquen:100tn:00000000000000000000000000000000"
-```
-
-**Múltiples transacciones** (batch):
-```
-<sorted-tx-ids-csv>:<prevHash>
-Ej: "tx-001,tx-002,tx-003:00000000000000000000000000000000"
-```
-
-### 6.2 Algoritmo
+**Algoritmo:**
 
 ```
 hash = md5(payload + nonce)
 resultado VÁLIDO si: hash.startsWith(DIFFICULTY)
 
-Ej: DIFFICULTY = "0000"
-    payload + "12345" → md5 → "0000a1b2c3d4e5f6..."
-    ✅ VÁLIDO (empieza con 0000)
-    
-    payload + "99999" → md5 → "a1b2c3d4e5f60000..."
-    ❌ INVÁLIDO (no empieza con 0000)
+Ejemplo con difficulty = "0000":
+  payload + "12345" → md5 → "0000a1b2c3d4e5f6..." ✅ VÁLIDO
+  payload + "99999" → md5 → "a1b2c3d4e5f60000..." ❌ INVÁLIDO
 ```
 
-### 6.3 División del Espacio de Nonces
+### 1.4 Minero CPU vs GPU
 
-Todo worker recibe un rango disjunto y exclusivo:
+```mermaid
+flowchart LR
+    TASK["mining_tasks"] --> WORKER
+    subgraph WORKER["Worker"]
+        C["consumer.js"] --> M["miner.js"]
+        M -->|"WORKER_TYPE=CPU"| CPU["node pow_cpu_range.js\n<payload> <diff> <start> <end>\nBúsqueda secuencial"]
+        M -->|"WORKER_TYPE=GPU"| GPU["./pow_gpu_range\n<payload> <diff> <start> <end>\nMiles de hilos CUDA\nsm_61 · GTX 1050"]
+    end
+    CPU -->|"stdout: Nonce / NOT FOUND"| RESULT["mining_results"]
+    GPU -->|"stdout: Nonce / NOT FOUND"| RESULT
+```
+
+**Diferencias clave:**
+
+| Aspecto | CPU | GPU |
+|---|---|---|
+| **Binary** | `tpi/pilar1/Hit7/CPU/pow_cpu_range.js` | `tpi/pilar1/Hit7/GPU/pow_gpu_range.cu` |
+| **Ejecución** | `node pow_cpu_range.js ...` | `./pow_gpu_range ...` |
+| **Paradigma** | Secuencial — un nonce a la vez | Masivamente paralelo — miles de hilos |
+| **Rendimiento** | ~70ms/búsqueda + ~200ms spawn | Órdenes de magnitud más rápido |
+| **Compilación** | No requiere (JS interpretado) | `nvcc -O3 -arch=sm_61` (CUDA 12.2) |
+| **Hardware** | Cualquier CPU | NVIDIA GTX 1050 (Pascal) |
+
+**Output de ambos mineros (mismo formato):**
+
+```
+Prefix: 0000
+Nonce:   12345
+Prev_Hash: abc123...
+Hash:     0000def456...
+Time:   123.4567 ms
+```
+
+Si no encuentra solución en el rango:
+
+```
+NOT FOUND
+Time:   456.7890 ms
+```
+
+---
+
+## P2 — Distribución async de tareas de minería (RabbitMQ)
+
+> **Correspondencia TP:** *"Integración de un sistema de colas (RabbitMQ) configurado en una arquitectura híbrida de colas y tópicos a la cual se suscriben un conjunto de nodos workers..."*
+
+### 2.1 Conexión
+
+- **Protocolo:** AMQP 0-9-1
+- **URL por defecto:** `amqp://guest:guest@rabbitmq:5672`
+- **TLS (prod):** `amqps://...` vía `RABBITMQ_CA`, `RABBITMQ_CERT`, `RABBITMQ_KEY`
+- **Reconexión:** Backoff exponencial: 1s → 2s → 4s → 8s → 16s → 32s (6 intentos)
+
+### 2.2 Colas y Exchanges
+
+```mermaid
+flowchart TB
+    subgraph RabbitMQ["🐰 RabbitMQ — Colas y Exchanges"]
+        direction TB
+        
+        subgraph Queues["Colas"]
+            MT["mining_tasks\n📦 durable · prefetch=1"]
+            MR["mining_results\n📦 durable · DLX → dlx_mining"]
+            DLQ["mining_results_dlq\n📦 durable"]
+            KL["keepalive\n⏳ TTL=30s · no durable"]
+            SR["scale_requests\n📦 durable"]
+        end
+        
+        subgraph Exchanges["Exchanges"]
+            BC["block_confirmed\n📡 fanout · no durable"]
+            DLX["dlx_mining\n🔀 direct · durable"]
+        end
+        
+        MR -.->|"nack sin requeue"| DLX
+        DLX --> DLQ
+    end
+    
+    POOL["Pool"] -->|"publica tareas"| MT
+    COORD_L["Coordinator\n(líder)"] -->|"publica tareas"| MT
+    MT -->|"consume"| W1["Worker 1"]
+    MT -->|"consume"| W2["Worker 2"]
+    MT -->|"consume"| WN["Worker N"]
+    
+    W1 -->|"publica resultado"| MR
+    W2 -->|"publica resultado"| MR
+    WN -->|"publica resultado"| MR
+    MR -->|"consume (solo líder)"| COORD_L
+    
+    COORD_L -->|"publica bloque"| BC
+    BC -->|"suscribe"| POOL
+    BC -->|"suscribe"| COORD_F1["Coordinator\n(follower)"]
+    BC -->|"suscribe"| COORD_F2["Coordinator\n(follower)"]
+    
+    W1 -->|"heartbeat c/10s"| KL
+    W2 -->|"heartbeat c/10s"| KL
+    WN -->|"heartbeat c/10s"| KL
+    KL -->|"consume"| POOL
+    
+    POOL -->|"si 0 workers"| SR
+```
+
+### 2.3 Tabla de colas
+
+| Cola | Durable | TTL | DLX | Prefetch | Producen | Consumen |
+|---|---|---|---|---|---|---|
+| `mining_tasks` | ✅ Sí | — | — | 1 por worker | Pool, Coordinator | Workers |
+| `mining_results` | ✅ Sí | — | `dlx_mining` | 1 | Workers | Coordinator (solo líder) |
+| `mining_results_dlq` | ✅ Sí | — | — | — | DLX reenvía | Coordinator (logging) |
+| `keepalive` | ❌ No | 30s | — | — | Workers | Pool |
+| `scale_requests` | ✅ Sí | — | — | — | Pool | — (futuro KEDA) |
+
+### 2.4 Patrones de mensajería implementados
+
+**1. Work Queue / Competing Consumers — `mining_tasks`**
+
+```
+Pool ──PUBLISH──► mining_tasks ──► Worker 1 (prefetch=1)
+                   (durable)    ──► Worker 2 (prefetch=1)
+                                ──► Worker N (prefetch=1)
+```
+
+- Mensajes persistentes (sobreviven reinicios de RabbitMQ)
+- Cada worker toma una tarea a la vez (`prefetch=1`)
+- ACK explícito tras publicar resultado
+
+**2. Dead Letter Exchange — `mining_results`**
+
+```
+Worker → mining_results (DLX: dlx_mining)
+           │
+     si handler falla
+           ▼
+    mining_results_dlq → Coordinator (logging)
+```
+
+- Si el handler del líder lanza excepción, RabbitMQ reenvía automáticamente el mensaje al DLX
+- El DLX lo redirige a la cola muerta para inspección
+
+**3. Fanout / Pub-Sub — `block_confirmed`**
+
+```
+Coordinator LÍDER ──PUBLISH──► block_confirmed (fanout)
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+                Pool           Coord Follower   Coord Follower
+              (flag=false)     (notificación)   (notificación)
+```
+
+- Cada suscriptor crea su cola exclusiva auto-delete
+- Pool lo usa para liberar el flag de minería y gatillar el siguiente bloque
+
+**4. Keepalive TTL — `keepalive`**
+
+```
+Worker ──PUBLISH cada 10s──► keepalive ──CONSUME──► Pool
+                              TTL=30s
+                              no durable
+```
+
+- Cola no durable: perder keepalives al reiniciar RabbitMQ es aceptable
+- Pool evicta workers cuyo `lastSeen + TTL < now`
+
+---
+
+## P3 — Estado blockchain, transacciones y bloques (Redis)
+
+> **Correspondencia TP:** *"Integración de un motor de DB con persistencia (Redis + Persistencia) el cual permite registrar el trackeo de las operaciones en la base de datos. Esta será la encargada de construir la 'blockchain'."*
+
+### 3.1 Schema de Redis
+
+```mermaid
+flowchart LR
+    subgraph Redis["🗄️ Redis — Blockchain"]
+        direction TB
+        
+        CHAIN["chain\n📋 LIST"]
+        CHAIN --> H1["block:<hash_1>\n🔢 HASH"]
+        CHAIN --> H2["block:<hash_2>\n🔢 HASH"]
+        CHAIN --> H3["block:<...>\n🔢 HASH"]
+        
+        LOCK["lock:<prevHash>\n🔒 SET NX EX 30"]
+        LEADER["leader:coordinator\n👑 STRING EX 15"]
+    end
+```
+
+### 3.2 Keys
+
+| Key | Tipo | Comando | TTL | Propósito |
+|---|---|---|---|---|
+| `block:<block_hash>` | Hash | `HSET` / `HGETALL` | — | Datos completos del bloque |
+| `chain` | List | `RPUSH` / `LRANGE` | — | Hashes ordenados de todos los bloques |
+| `leader:coordinator` | String | `SET EX` / `GET` | 15s | ID del coordinator líder actual |
+| `lock:<prevHash>` | String | `SET NX EX` | 30s | Lock atómico para commit de bloque |
+
+### 3.3 Estructura de un bloque en Redis
+
+```
+HSET block:000048980b98addc5dbd60dc56ccceb6 \
+    previous_hash  "00000000000000000000000000000000" \
+    nonce          "0" \
+    timestamp      "2026-06-26T00:00:00.000Z" \
+    transactions   "[]" \
+    block_hash     "000048980b98addc5dbd60dc56ccceb6"
+
+RPUSH chain 000048980b98addc5dbd60dc56ccceb6
+```
+
+### 3.4 Bloque génesis
+
+Se crea automáticamente cuando la chain está vacía al iniciar el primer Coordinator:
+
+```json
+{
+  "previous_hash": "00000000000000000000000000000000",
+  "nonce": "0",
+  "timestamp": "<fecha de inicio>",
+  "transactions": [],
+  "block_hash": "000048980b98addc5dbd60dc56ccceb6"
+}
+```
+
+El `block_hash` del génesis es `md5("genesis")` — es determinista, siempre el mismo valor.
+
+### 3.5 Persistencia
+
+Redis se ejecuta con AOF (Append Only File):
+
+```bash
+redis-server --appendonly yes
+```
+
+Esto garantiza que la blockchain persiste entre reinicios del contenedor.
+
+### 3.6 SQLite — Base de datos de autenticación
+
+Además de Redis, el Coordinator utiliza SQLite para almacenar entidades y credenciales:
+
+```
+📁 data/auth.db
+
+Tabla: entities
+├── id            INTEGER PRIMARY KEY
+├── name          TEXT UNIQUE     -- "mina-san-juan"
+├── display_name  TEXT            -- "Mina San Juan"
+├── password_hash TEXT            -- bcrypt("admin123")
+├── public_key    TEXT            -- PEM Ed25519
+└── private_key   TEXT            -- PEM Ed25519
+```
+
+**Datos semilla** (6 entidades cargadas al primer inicio):
+- mina-san-juan, planta-neuquen, refineria-bahia-blanca
+- operador-pozo-mendoza, terminal-puerto-rosario, impostor
+
+Todas comparten la misma password por defecto: `admin123`
+
+### 3.7 Consultas disponibles a la chain
+
+| Endpoint | Propósito |
+|---|---|
+| `GET /chain` | Blockchain completa |
+| `GET /chain/:blockHash` | Bloque individual |
+| `GET /chain/lot/:lotId` | Transacciones de un lote a lo largo de toda la chain |
+| `GET /entities` | Listar entidades registradas |
+
+---
+
+## P4 — Nodo coordinador de tareas (NCT)
+
+> **Correspondencia TP:** *"Nodo coordinador que será responsable de definir cómo se estructuran las transacciones, formar los bloques, y responsable del algoritmo de consenso."*
+
+El NCT es el cerebro del sistema. Existen **2 réplicas** de Coordinator, pero solo la **líder** (electa mediante algoritmo Bully) consume resultados de minería.
+
+### 4.1 Proceso completo (NCT.1 → NCT.4)
+
+```mermaid
+sequenceDiagram
+    participant P as Pool
+    participant C as Coordinator (Líder)
+    participant R as Redis
+    participant Q as RabbitMQ
+    participant W as Workers
+    
+    Note over P,W: NCT.1 — Publicación de Tareas
+    P->>C: POST /mine { transactions, prevHash }
+    C->>R: GET chain → last block → prevHash
+    C->>C: buildPayload(txs, prevHash)
+    C->>C: split(workerCount) → N rangos de nonce
+    C->>Q: PUBLISH mining_tasks × N
+    
+    Note over P,W: NCT.2 — Competencia/Cooperación
+    Q->>W: CONSUME mining_tasks (prefetch=1)
+    W->>W: mine(payload, difficulty, start, end)
+    W->>Q: PUBLISH mining_results { found, nonce, hash }
+    
+    Note over P,W: NCT.3 — Verificación de resultados
+    Q->>C: CONSUME mining_results (solo líder)
+    C->>C: ¿found === true?
+    C->>R: acquireLock(prevHash) → SET NX EX 30
+    C->>C: md5(payload + nonce).startsWith(difficulty)?
+    
+    Note over P,W: NCT.4 — Almacenamiento de Bloques
+    C->>R: HSET block:<hash> ...
+    C->>R: RPUSH chain <hash>
+    C->>Q: PUBLISH block_confirmed (fanout)
+    Q->>P: notifica → _miningInProgress = false
+    Q->>C: notifica (follower) → consistencia
+```
+
+### 4.2 NCT.1 — Publicación de Tareas
+
+El Pool gatilla la minería cuando acumula suficientes transacciones (`pool.size() >= BLOCK_THRESHOLD`). Esto puede ocurrir de dos formas:
+
+**A) Vía HTTP — Pool llama a Coordinator:**
+```
+Pool ──POST /mine──► Coordinator
+```
+
+**B) Vía directa — Pool publica en RabbitMQ (fallback):**
+```
+Pool ──sendToQueue('mining_tasks')──► RabbitMQ
+```
+
+Cada tarea publicada contiene:
+
+```json
+{
+  "task_id": "uuid-unico",
+  "payload": "LOTE-001:mina->planta:100tn:0000...",
+  "prev_hash": "00004898...",
+  "difficulty": "0000",
+  "nonce_start": 0,
+  "nonce_end": 4503599627370495,
+  "transactions": [...]
+}
+```
+
+**División del espacio de nonces:**
 
 ```
 MAX_NONCE = Number.MAX_SAFE_INTEGER = 9007199254740991
@@ -472,270 +507,261 @@ Con 2 workers:
 
 Con N workers:
   chunk = MAX_NONCE / N
-  Worker i: [i * chunk, (i+1) * chunk - 1]
-  Último worker: [i * chunk, MAX_NONCE]
+  Worker i: [i × chunk, (i+1) × chunk - 1]
+  Último worker: [i × chunk, MAX_NONCE]
 ```
 
-### 6.4 Minero CPU
+### 4.3 NCT.2 — Competencia / Cooperación
 
-- **Binary**: `tpi/pilar1/Hit7/CPU/pow_cpu_range.js`
-- **Ejecución**: `node pow_cpu_range.js <payload> <difficulty> <start> <end>`
-- **Implementación**: Node.js, búsqueda secuencial en rango, MD5
-- **Rendimiento**: ~70ms por búsqueda + ~200ms spawn overhead
+Los workers consumen tareas de `mining_tasks` con `prefetch=1`. Cada worker:
 
-### 6.5 Minero GPU
+1. Toma la tarea de la cola
+2. Ejecuta el minero (CPU o GPU) sobre su rango asignado
+3. Publica el resultado en `mining_results`
+4. Hace ACK del mensaje original
 
-- **Binary**: `tpi/pilar1/Hit7/GPU/pow_gpu_range.cu`
-- **Compilación**: `nvcc -O3 -arch=sm_61` (GTX 1050, Pascal, CUDA 12.2)
-- **Ejecución**: `./pow_gpu_range <payload> <difficulty> <start> <end>`
-- **Implementación**: CUDA C++ paralelo en GPU, miles de hilos simultáneos
-- **Rendimiento**: Ordenes de magnitud más rápido que CPU por el paralelismo masivo
-- **Arquitectura objetivo**: `sm_61` (GTX 1050)
-
-### 6.6 Output Parseado
-
-Ambos mineros producen el mismo formato de salida:
-
-```
-Prefix: 0000
-Nonce:   12345
-Prev_Hash: abc123...
-Hash:     def456...
-Time:   123.4567 ms
-```
-
-O si no encontró:
-```
-NOT FOUND
-Time:   456.7890 ms
-```
-
----
-
-## 7. Tolerancia a Fallos: Algoritmo Bully
-
-### 7.1 Descripción
-
-Se implementa una elección de líder tipo **Bully** sobre Redis Pub/Sub para determinar qué instancia de Coordinator es la líder y debe consumir resultados de minería.
-
-### 7.2 Identidad
-
-Cada coordinator deriva un ID numérico:
 ```javascript
-COORDINATOR_ID = Number(process.env.COORDINATOR_ID) || hashCode(hostname)
-```
-A mayor ID, mayor prioridad (el más grande gana).
-
-### 7.3 Protocolo Completo
-
-```
-1. START: Cada coordinator arranca y consulta Redis
-   ├── GET leader:coordinator
-   │   ├── EXISTS → modo follower, poll cada 5s
-   │   └── NOT FOUND → inicia elección
-
-2. ELECTION:
-   ├── PUBLISH election:start { id: <my_id> }
-   ├── Espera 3s (ELECTION_TIMEOUT)
-   │   ├── Si recibe election:answer de ID mayor → concede
-   │   └── Si no recibe respuesta → se declara líder
-   │
-   ├── Al recibir election:start de ID menor:
-   │   ├── PUBLISH election:answer { id: <my_id>, to: <their_id> }
-   │   └── Inicia su propia elección (si no está en una)
-   │
-   └── Al recibir election:answer donde data.to === my_id y data.id > my_id:
-       └── Marca electionAnswered = true → no se declara líder
-
-3. VICTORY:
-   ├── SET leader:coordinator <id> EX 15
-   ├── PUBLISH election:victory { id: <my_id> }
-   ├── Inicia heartbeat (renueva cada 5s)
-   ├── Emite evento 'elected'
-   │   └── Coordinator leader empieza a consumir mining_results
-   └── Emite evento 'leader-changed'
-
-4. DETECCIÓN DE CAÍDA:
-   ├── Follower verifica leader:coordinator cada 5s
-   │   ├── Si la clave expiró (TTL 15s, líder caído) → inicia nueva elección
-   │   └── Si la clave sigue viva → líder ok
-   │
-   └── Líder renueva clave cada 5s
-       ├── Si falla → clave expira → otro nodo inicia elección
-       └── Si renueva con éxito → sigue siendo líder
-
-5. TRANSICIÓN:
-   ├── leader → follower:
-   │   ├── Cancela heartbeat
-   │   ├── Cancela consumer de mining_results
-   │   └── Empieza a hacer poll como follower
-   │
-   └── follower → leader:
-       ├── Inicia heartbeat
-       ├── Empieza a consumir mining_results
-       └── Emite 'elected'
+// worker/consumer.js — flujo por tarea
+const task = JSON.parse(msg.content.toString());
+const mineResult = await mine({ payload, difficulty, nonceStart, nonceEnd });
+const result = {
+  task_id: task.task_id,
+  worker_id: WORKER_ID,
+  found: mineResult.found,
+  nonce: mineResult.nonce,
+  hash: mineResult.hash,
+  payload: task.payload,
+  prev_hash: task.prev_hash,
+  difficulty: task.difficulty,
+  transactions: task.transactions,
+};
+channel.sendToQueue('mining_results', Buffer.from(JSON.stringify(result)), { persistent: true });
+channel.ack(msg);
 ```
 
-### 7.4 Redis Keys para Elección
+### 4.4 NCT.3 — Verificación de Resultados
 
-| Key | Tipo | TTL | Propósito |
-|---|---|---|---|
-| `leader:coordinator` | String | 15s | ID del líder actual |
-| — | Pub/Sub | — | Canal `election:start` |
-| — | Pub/Sub | — | Canal `election:answer` |
-| — | Pub/Sub | — | Canal `election:victory` |
+**Solo el líder** consume de `mining_results`. El proceso de verificación tiene 3 gates:
 
-### 7.5 Propiedades
+```
+1. Gate: ¿found === true?
+   ├── false → descartar (worker no encontró nonce en su rango)
+   └── true → continuar
 
-- **Tolerancia a particiones**: Si la red se divide, ambos lados eligen líder. Al sanar, el de mayor ID gana.
-- **Split-brain prevention**: Solo el líder consume `mining_results`. Si hay dos líderes temporales, el lock atómico `SET NX EX` evita doble commit.
-- **Failover**: <15s desde que el líder cae hasta que otro es electo.
+2. Gate: acquireLock(prevHash)
+   ├── false → otro worker ya confirmó este bloque, descartar
+   └── true → lock adquirido, continuar (SET NX EX 30)
+
+3. Gate: md5(payload + nonce).startsWith(difficulty)
+   ├── false → nonce inválido, descartar
+   └── true → ¡PoW válido! Proceder a almacenar bloque
+```
+
+El **lock atómico** (`SET NX EX 30`) garantiza que aunque dos workers encuentren solución casi simultáneamente, solo una se confirma. El TTL de 30s evita bloqueos permanentes si el líder falla.
+
+### 4.5 NCT.4 — Almacenamiento de Bloques
+
+```javascript
+// 1. Construir objeto bloque
+const block = buildBlock(
+  { prev_hash: result.prev_hash, transactions: result.transactions },
+  result.nonce,
+  hash  // hash verificado
+);
+
+// 2. Almacenar en Redis
+await storeBlock(block);
+// → HSET block:<hash> previous_hash nonce timestamp transactions block_hash
+// → RPUSH chain <hash>
+
+// 3. Notificar a toda la red
+await publishBlockConfirmed(block);
+// → PUBLISH a exchange 'block_confirmed' (fanout)
+```
+
+### 4.6 Tolerancia a Fallos — Algoritmo Bully
+
+Para garantizar que siempre haya exactamente un líder consumiendo resultados, se implementa el algoritmo Bully sobre Redis Pub/Sub:
+
+```mermaid
+flowchart TB
+    subgraph Normal["Operación Normal"]
+        L1["Líder: Coordinator A"] -->|"heartbeat c/5s"| RK["Redis\nleader:coordinator\nEX 15"]
+        F1["Follower: Coordinator B"] -->|"poll c/5s"| RK
+        F2["Follower: Coordinator C"] -->|"poll c/5s"| RK
+        L1 -->|"consume mining_results"| RQ["RabbitMQ"]
+    end
+    
+    subgraph Failover["Caída del Líder"]
+        RK2["leader:coordinator\nexpira (15s)"]
+        F1_2["Coordinator B"] -->|"detecta clave expirada"| E1["election:start\nPUB/SUB"]
+        F2_2["Coordinator C"] -->|"detecta clave expirada"| E1
+        E1 -->|"responde ID mayor"| WIN["Gana el de mayor ID"]
+        WIN -->|"SET leader:coordinator"| L2["Nuevo líder: Coordinator B"]
+        L2 -->|"consume mining_results"| RQ2["RabbitMQ"]
+    end
+```
+
+**Parámetros:**
+
+| Parámetro | Valor | Descripción |
+|---|---|---|
+| `LEADER_TTL` | 15s | TTL de la clave `leader:coordinator` |
+| `HEARTBEAT_INTERVAL` | 5s | Intervalo con que el líder renueva la clave |
+| `ELECTION_TIMEOUT` | 3s | Espera por respuestas en una elección |
+| `LEADER_CHECK_INTERVAL` | 5s | Frecuencia con que los followers verifican |
+
+**Propiedades:**
+
+- **Split-brain prevention:** El lock atómico `SET NX EX` evita que dos líderes temporales confirmen el mismo bloque
+- **Failover:** < 15s desde que el líder cae hasta que otro es electo
+- **ID:** Se puede asignar vía `COORDINATOR_ID` o se deriva del hostname
 
 ---
 
-## 8. Modelo de Autenticación y Autorización
+## P5 — Pool de Transacciones
 
-### 8.1 JWT
+> **Correspondencia TP:** *"Pool de transacciones (TrP) pendientes donde el TrP fragmenta una tarea completa en desafíos más pequeños... subdivide tareas de minería en partes más pequeñas (rangos de búsqueda del nonce)... recibir keep-alive de los mineros GPU..."*
 
-- **Secreto**: `JWT_SECRET` (default: `pilar2-dev-secret` para desarrollo)
-- **Expiración**: 24 horas
-- **Payload**: `{ name: "mina-san-juan", displayName: "Mina San Juan" }`
+### 5.1 Arquitectura del Pool
 
-### 8.2 Login
+```mermaid
+flowchart TB
+    subgraph Pool["🏊 Pool de Transacciones"]
+        direction TB
+        
+        IN["POST /transaction"] --> V["validateTransaction()\n(schema + Ed25519)"]
+        V -->|"válida"| CC["checkCustody()\n¿el origen es el dueño\ndel lote?"]
+        CC -->|"sí"| ADD["pool.add(tx)\n(buffer en memoria)"]
+        CC -->|"no"| REJ["403 Forbidden\n'no tiene custodia'"]
+        ADD --> THRESHOLD{"pool.size() >=\nBLOCK_THRESHOLD?"}
+        THRESHOLD -->|"sí"| FLUSH["pool.flush() → batch\ntriggerMining(batch)"]
+        THRESHOLD -->|"no"| WAIT["Esperar más txs"]
+        
+        FLUSH --> SPLIT["nonce-splitter.js\nsplit(workerCount)"]
+        SPLIT --> PUB["publicar en mining_tasks"]
+        
+        POOL_STATE["Estado interno:
+        · pool: [] (array en memoria)
+        · _miningInProgress: boolean
+        · registry: Map<worker_id, {type, lastSeen}>"]
+    end
+    
+    subgraph Workers["Workers"]
+        REG["worker-registry.js\n· TTL = 30s
+        · register(id, type)
+        · evict si lastSeen + TTL < now
+        · count({ type: 'GPU' })"]
+    end
+    
+    KEEP["keepalive queue\n(c/10s)"] --> REG
+    
+    FLUSH -->|"si 0 workers activos"| SCALE["scale_requests queue\n→ futuro KEDA"]
+```
+
+### 5.2 Flujo del Pool
+
+**Paso a paso desde que llega una transacción:**
 
 ```
-POST /auth/login
-Body: { entity: "mina-san-juan", password: "admin123" }
-Response: { token: "eyJ...", entity: { name: "mina-san-juan", displayName: "Mina San Juan" } }
+1. POST /transaction → validateTransaction(tx)
+   ├── 8 campos requeridos
+   ├── cantidad > 0
+   ├── tipo ∈ [MINERAL, CRUDO]
+   ├── origen ≠ destino
+   └── firma Ed25519 ok (o __unsigned__)
+
+2. checkCustody(tx)
+   ├── pool.findByLot(lotId) → ¿último.destino === tx.origen?
+   └── GET /chain/lot/:lotId → ¿último.destino === tx.origen?
+
+3. pool.add(tx)
+
+4. ¿pool.size() >= BLOCK_THRESHOLD Y _miningInProgress === false?
+   ├── Sí → pool.flush() → triggerMining(batch)
+   │        ├── GET /status (Coordinator) → prevHash
+   │        ├── split(workerCount) → rangos
+   │        ├── buildPayload(batch, prevHash)
+   │        └── PUBLISH mining_tasks × N
+   └── No → esperar
 ```
 
-### 8.3 Uso
+**Cadena de custodia:**
 
-- El endpoint `POST /sign` requiere JWT para firmar transacciones
-- El JWT identifica qué entidad está autorizada a usar la clave privada
-- Todas las demás rutas son públicas
-
-### 8.4 Firma Ed25519
-
-**Canonicalización** (campos firmados en orden):
-```
-{ id, id_lote, origen, destino, cantidad, tipo, timestamp }
-```
-`firma` está explícitamente excluida de la canonicalización.
-
-**Verificación**:
-```
-publicKey = getPublicKey(tx.origen)
-verifySignature(canonicalize(tx), tx.firma, publicKey)
-```
-
-**Sentinel de testing**: `firma: '__unsigned__'` salta verificación criptográfica.
-
----
-
-## 9. Cadena de Custodia
-
-### 9.1 Concepto
-
-Cada lote de mineral (`id_lote`) tiene un dueño actual. Las transacciones solo son válidas si `origen` es el dueño actual del lote.
-
-### 9.2 Reglas de Validación
+La custodia se verifica contra dos fuentes:
 
 ```
 Para tx con lotId = "LOTE-001":
-  1. Buscar en pending pool: findByLot("LOTE-001")
-     ├── Si hay pendientes: último.destino === tx.origen?
-     │   ├── Sí → ok
-     │   └── No → 403 Forbidden
-     └── Si no hay pendientes → paso 2
-     
-  2. Consultar chain: GET /chain/lot/LOTE-001
-     ├── Si hay registros: último.destino === tx.origen?
-     │   ├── Sí → ok
-     │   └── No → 403 Forbidden (holder actual: <último.destino>)
-     └── Si no hay registros → ok (primera tx del lote)
+  
+  REGLA: último.destino del lote debe coincidir con tx.origen
+
+  1. Buscar en pending pool:
+     ├── pool.findByLot("LOTE-001")
+     └── ¿hay pendientes? → último.destino === tx.origen?
+  
+  2. Buscar en chain confirmada:
+     ├── GET /chain/lot/LOTE-001 (Coordinator)
+     └── ¿hay registros? → último.destino === tx.origen?
+  
+  3. Si no hay registros → es la primera tx del lote → ok
 ```
 
-### 9.3 Ciclo de Ejemplo
+### 5.3 Worker Registry (Keepalive)
 
-```
-mina-san-juan → planta-neuquen → refineria-bahia-blanca → terminal-puerto-rosario → mina-san-juan → ...
-```
-
-Cada transacción mueve la custodia. El ciclo puede continuar indefinidamente.
-
----
-
-## 10. Despliegue Local (Docker Compose)
-
-### 10.1 Servicios
-
-| Servicio | Imagen | Puertos | Réplicas | Depende de |
-|---|---|---|---|---|
-| `rabbitmq` | `rabbitmq:3-management` | 5672, 15672 | 1 | — |
-| `redis` | `redis:7-alpine` | 6379 | 1 | — |
-| `validator` | build local | — | 2 | — |
-| `coordinator` | build local | — | 2 | rabbitmq (healthy), redis (healthy) |
-| `pool` | build local | 3001 | 1 | rabbitmq (healthy), coordinator |
-| `worker` | build local | — | 2 | rabbitmq (healthy), pool |
-| `frontend` | build `./frontend` | 8080:80 | 1 | coordinator, pool |
-
-### 10.2 Imagen Docker
-
-**Dockerfile** (single image para todos los servicios):
-```dockerfile
-FROM node:20-alpine
-RUN apk add --no-cache python3 make g++
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY . .
-CMD ["node", "entrypoint.js"]
+```mermaid
+flowchart LR
+    subgraph WorkerLifecycle["Ciclo de vida de un Worker"]
+        START["Worker arranca"] -->|"PUBLISH keepalive"| KEEP["cola keepalive\nTTL=30s"]
+        KEEP -->|"CONSUME"| POOL_REG["Pool: registry.register(id, type)"]
+        POOL_REG -->|"count()"| EVICT["¿lastSeen + TTL < now?\n→ evict"]
+        EVICT -->|"sigue vivo"| WORK["Worker mina txs"]
+        WORK -->|"cada 10s"| KEEP
+        EVICT -->|"expirado"| DEAD["Worker eliminado del registry"]
+    end
 ```
 
-**Entrypoint** selecciona servicio según `SERVICE` env var:
 ```javascript
-const map = {
-  coordinator: './coordinator/index.js',
-  pool: './pool/index.js',
-  worker: './worker/index.js',
-  validator: './validator/server.js',
-};
-require(map[process.env.SERVICE]);
+// worker-registry.js — TTL-based, evicción lazy
+const registry = new Map();
+
+function register(id, type) {
+  registry.set(id, { id, type, lastSeen: Date.now() });
+}
+
+function count(filter) {
+  _evict(); // elimina workers con lastSeen + TTL < now
+  if (!filter.type) return registry.size;
+  return [...registry.values()].filter(w => w.type === filter.type).length;
+}
 ```
 
-### 10.3 Red
+**Evento de reconexión:** Cuando un worker aparece después de que el registry estaba vacío, y hay txs pendientes en el pool, se gatilla minería automáticamente:
 
-- Network bridge única: `blockchain`
-- Comunicación interna por nombre de servicio (Docker DNS)
-- Solo `pool:3001` y `frontend:8080` expuestos al host
+```javascript
+// pool/index.js — al recibir keepalive
+if (wasEmpty && pool.size() > 0) {
+  const batch = pool.flush();
+  triggerMining(batch);
+}
+```
 
----
+### 5.4 Auto-escalado
 
-## 11. Despliegue en Producción (GKE + Helm)
+Cuando `registry.count() === 0` (ningún worker activo), el Pool publica un mensaje en la cola `scale_requests`:
 
-### 11.1 Infraestructura (OpenTofu)
+```json
+{
+  "type": "scale_up",
+  "service": "worker",
+  "reason": "no_active_workers",
+  "requested_count": 2
+}
+```
 
-- **Cluster GKE**: 2 node pools
-  - `infra-pool`: tainted `role=infra:NoSchedule` para RabbitMQ y Redis
-  - `app-pool`: Coordinator, Pool, Worker, Validator, Frontend
-- **GPU VMs** (legacy): 3× n1-standard-4 + nvidia-tesla-t4
-
-### 11.2 Helm Chart (`charts/blockchain/`)
-
-| Componente | Tipo | Réplicas | Node Pool | Puerto |
-|---|---|---|---|---|
-| Coordinator | Deployment | 1 (2 en compose) | app-pool | 3000 |
-| Pool | Deployment | 1 | app-pool | 3001 |
-| Worker | Deployment | HPA (1-10) | app-pool | 3002 |
-| Validator | Deployment | 1 | app-pool | 3003 |
-| Frontend | Deployment | 1 | app-pool | 80 |
-| RabbitMQ | Deployment | 1 | infra-pool | 5672, 15672 |
-| Redis | Deployment | 1 | infra-pool | 6379 |
-
-### 11.3 Autoescalado (HPA)
+Esta cola está preparada para integrarse con **KEDA** (Kubernetes Event-Driven Autoscaling) en el futuro. Actualmente, el HPA de Kubernetes escala workers basado en CPU:
 
 ```yaml
+# charts/blockchain/templates/worker/hpa.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 spec:
@@ -750,99 +776,130 @@ spec:
           averageUtilization: 70
 ```
 
-El HPA escala workers basado en CPU. Cuando hay muchas tareas de minería, el CPU sube y se crean más réplicas de worker automáticamente.
+---
 
-### 11.4 Ingress
+## Diagrama general de la arquitectura
 
-```yaml
-host: custody-chain.darwin-consulting.online
-tls: Let's Encrypt (cert-manager)
-backend: Frontend (puerto 80)
+```mermaid
+flowchart TB
+    subgraph Clients["📱 Clientes"]
+        FE["Frontend\nReact + Vite\n:8080"]
+        ST["Stress Test\nscripts/stress-test.js"]
+        CU["curl / scripts"]
+    end
+    
+    subgraph Services["⚙️ Servicios (Docker / K8s)"]
+        direction TB
+        
+        POOL["🏊 Pool (Express :3001)\n· validateTransaction()\n· checkCustody()\n· transaction-pool.js\n· nonce-splitter.js\n· worker-registry.js"]
+        
+        COORD["👑 Coordinator (Express :3000)\n· Líder: consume mining_results\n· Follower: poll leader\n· Bully Election\n· SQLite auth"]
+        
+        VAL["✅ Validator (Express :3003)\n· validateTransaction()\n· Servicio standalone"]
+        
+        WORK["⛏️ Workers (Express :3002)\n· consumer.js → mining_tasks\n· miner.js → CPU/GPU PoW\n· keepalive cada 10s"]
+        
+        NGINX["Frontend Nginx\nproxy_pass /api/coordinator/\nproxy_pass /api/pool/"]
+    end
+    
+    subgraph Infra["🗄️ Infraestructura"]
+        RABBIT["🐰 RabbitMQ 3\n· mining_tasks\n· mining_results + DLQ\n· keepalive (TTL 30s)\n· block_confirmed (fanout)\n· scale_requests"]
+        REDIS["🗄️ Redis 7 (AOF)\n· block:<hash>\n· chain (LIST)\n· leader:coordinator\n· lock:<prevHash>"]
+    end
+    
+    subgraph GPU["🖥️ GPU Externo (k3s)"]
+        GPUW["GPU Worker\nulisescasal/blockchain-\ngpu-worker:latest\n· CUDA sm_61\n· GTX 1050, 4GB\n· nvidia.com/gpu: 1"]
+    end
+    
+    subgraph Cloud["☁️ GKE (Google Cloud)"]
+        INGRESS["Ingress NGINX\ncustody-chain.darwin-\nconsulting.online\n· TLS Let's Encrypt"]
+        HPA["HPA (1-10 réplicas)\nescala workers por CPU"]
+    end
+    
+    %% Conexiones
+    FE --> NGINX
+    NGINX --> POOL
+    NGINX --> COORD
+    ST --> POOL
+    CU --> POOL
+    
+    POOL <--> RABBIT
+    COORD <--> RABBIT
+    COORD <--> REDIS
+    WORK <--> RABBIT
+    GPUW <-.->|"WAN\namqp://35.202.170.91"| RABBIT
+    WORK --> POOL
+    
+    POOL -.-> HPA
+    HPA -.->|"escala"| WORK
+    
+    INGRESS --> FE
+    
+    %% Labels
+    linkStyle 9,10,11,12 stroke-width:2px
 ```
-
-### 11.5 DNS
-
-- **Dominio**: `custody-chain.darwin-consulting.online` (Hostinger)
-- **Registro A**: apunta al Load Balancer IP del Ingress Controller NGINX
-- **TLS**: cert-manager + Let's Encrypt (ClusterIssuer `letsencrypt-prod`)
-  - HTTP-01 challenge con clase nginx
-  - Renovación automática cada 60 días
-  - Email: casalulises@gmail.com
 
 ---
 
-## 12. Cluster GPU Externo (k3s)
+## Despliegue e Infraestructura
 
-### 12.1 Arquitectura
-
-```
-                    ┌─────────────────────────────────┐
-                    │      GKE Cluster (GCP)           │
-                    ├─────────────────────────────────┤
-                    │  RabbitMQ: amqp://35.202.170.91  │
-                    │  (expuesto como LoadBalancer)    │
-                    └──────────────┬──────────────────┘
-                                   │
-                          Internet / WAN
-                                   │
-                    ┌──────────────▼──────────────────┐
-                    │   k3s Cluster (GPU externo)      │
-                    │   Namespace: g-amarillo          │
-                    ├─────────────────────────────────┤
-                    │  GPU Worker (1 pod)              │
-                    │  ┌───────────────────────────┐   │
-                    │  │ ulisescasal/blockchain-    │   │
-                    │  │   gpu-worker:latest        │   │
-                    │  │                           │   │
-                    │  │ WORKER_TYPE=GPU            │   │
-                    │  │ nvidia.com/gpu: 1          │   │
-                    │  │ ┌─────────────────────┐   │   │
-                    │  │ │ pow_gpu_range       │   │   │
-                    │  │ │ (CUDA, sm_61)       │   │   │
-                    │  │ │ GTX 1050, 4GB VRAM  │   │   │
-                    │  │ └─────────────────────┘   │   │
-                    │  └───────────────────────────┘   │
-                    └──────────────────────────────────┘
-```
-
-### 12.2 Deployment
+### Local (Docker Compose)
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: gpu-worker
-  namespace: g-amarillo
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate          # Sólo 1 pod por GPU
-  template:
-    spec:
-      containers:
-        - image: ulisescasal/blockchain-gpu-worker:latest
-          env:
-            - name: WORKER_TYPE
-              value: "GPU"
-            - name: RABBITMQ_URL
-              value: "amqp://guest:guest@35.202.170.91:5672"
-          resources:
-            limits:
-              nvidia.com/gpu: 1
+# docker-compose.yml — 7 servicios, red bridge
+services:
+  rabbitmq:   image: rabbitmq:3-management     # puertos 5672, 15672
+  redis:      image: redis:7-alpine             # puerto 6379, AOF
+  validator:  build: .                          # 2 réplicas
+  coordinator: build: .                         # 2 réplicas, depende de rabbitmq+redis
+  pool:       build: .                          # puerto 3001 expuesto
+  worker:     build: .                          # 2 réplicas CPU
+  frontend:   build: ./frontend                 # puerto 8080:80
 ```
 
-### 12.3 Características
+```bash
+# Iniciar todo
+docker compose up -d --build
 
-- **GPU**: 1× NVIDIA GTX 1050, 4GB VRAM, CUDA 12.2, Driver 535
-- **Arquitectura CUDA**: `sm_61` (Pascal)
-- **Estrategia**: `Recreate` — la GPU es exclusiva, no pueden correr 2 pods en la misma GPU
-- **RabbitMQ**: se conecta al clúster GKE via LoadBalancer IP pública: `35.202.170.91:5672`
-- **Imagen**: `ulisescasal/blockchain-gpu-worker:latest` en Docker Hub
-  - Multi-stage build: compila `.cu` con `nvcc` en stage 1, runtime CUDA + Node.js en stage 2
-  - Solo incluye `shared/`, `worker/`, `entrypoint.js` y el binario CUDA compilado
-- **Namespace**: `g-amarillo` (cluster externo independiente)
+# Solo infra para tests
+docker compose -f docker-compose.test.yml up -d
+```
 
-### 12.4 Build de Imagen GPU (desde ARM Mac)
+### Producción (GKE + Helm)
+
+| Componente | Tipo | Réplicas | Node Pool |
+|---|---|---|---|
+| Coordinator | Deployment | 1 (escalable) | app-pool |
+| Pool | Deployment | 1 | app-pool |
+| Worker | Deployment | HPA (1-10) | app-pool |
+| Validator | Deployment | 1 | app-pool |
+| Frontend | Deployment | 1 | app-pool |
+| RabbitMQ | Deployment | 1 | infra-pool (tainted) |
+| Redis | Deployment | 1 | infra-pool (tainted) |
+
+**Node pools (OpenTofu):**
+- `infra-pool` — tainted `role=infra:NoSchedule` → RabbitMQ, Redis (con toleration)
+- `app-pool` — Coordinator, Pool, Worker, Validator, Frontend
+
+**Ingress:**
+```yaml
+host: custody-chain.darwin-consulting.online
+tls: cert-manager + Let's Encrypt (acme-v02)
+```
+
+### GPU Externo (k3s)
+
+```
+GKE ─── RabbitMQ LoadBalancer ──► GPU Worker (k3s, namespace: g-amarillo)
+       35.202.170.91:5672              │
+                                       ├── Imagen: ulisescasal/blockchain-gpu-worker:latest
+                                       ├── WORKER_TYPE=GPU
+                                       ├── nvidia.com/gpu: 1
+                                       ├── Strategy: Recreate
+                                       └── CUDA sm_61 (GTX 1050)
+```
+
+**Build de imagen GPU (desde ARM Mac):**
 
 ```bash
 docker buildx build \
@@ -854,333 +911,26 @@ docker buildx build \
 
 ---
 
-## 13. Frontend Web (React + Vite + Nginx)
+## Variables de Entorno
 
-### 13.1 Stack
-
-- **Framework**: React 18
-- **Build tool**: Vite 5
-- **CSS**: Tailwind CSS 3.4 + Lucide icons
-- **Serve**: Nginx (multi-stage Docker build)
-
-### 13.2 Vistas
-
-| Vista | Archivo | Propósito |
-|---|---|---|
-| TransactionForm | `views/TransactionForm.jsx` | Pipeline 5 pasos: Complete → Sign → Pool → Mine → Confirm |
-| BlockExplorer | `views/BlockExplorer.jsx` | Visualización SVG de la blockchain |
-| CustodyTracker | `views/CustodyTracker.jsx` | Grafo dirigido de custodia + detección de desvío |
-| MiningMonitor | `views/MiningMonitor.jsx` | Sala de control de minería (grid 2×2) |
-| OverviewBar | `components/OverviewBar.jsx` | Barra de métricas en tiempo real |
-
-### 13.3 API Client
-
-```javascript
-const COORDINATOR = '/api/coordinator';
-const POOL = '/api/pool';
-
-api.login(entity, password)
-api.getStatus(), api.getChain(), api.getBlock(hash)
-api.getLot(lotId), api.getEntities()
-api.signTransaction(transaction)        // requiere JWT
-api.submitTransaction(tx)
-api.getPoolStatus(), api.getPending()
-api.triggerMining()
-api.getScaleStatus(), api.getRabbitStatus()
-```
-
-### 13.4 Nginx Proxy
-
-```nginx
-location /api/coordinator/ {
-    rewrite ^/api/coordinator/(.*) /$1 break;
-    proxy_pass http://coordinator:3000;
-}
-location /api/pool/ {
-    rewrite ^/api/pool/(.*) /$1 break;
-    proxy_pass http://pool:3001;
-}
-```
-
-### 13.5 Desarrollo
-
-Vite proxy: `/api/coordinator` → `http://localhost:3000`, `/api/pool` → `http://localhost:3001`
-
----
-
-## 14. Pipeline CI/CD
-
-### 14.1 GitHub Actions
-
-```yaml
-name: Deploy to GKE
-on:
-  push:
-    branches: [main]
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Helm Deploy
-        run: helm upgrade --install blockchain ./charts/blockchain \
-          --namespace prod --create-namespace
-```
-
-**Estado**: Incompleto — faltan pasos de autenticación GKE, build/push Docker, y manejo de tags de imagen.
-
----
-
-## 15. Variables de Entorno
-
-| Variable | Default | Usada por | Propósito |
+| Variable | Default | Servicio | Propósito |
 |---|---|---|---|
-| `SERVICE` | _(requerida)_ | entrypoint.js | Selección de servicio |
-| `RABBITMQ_URL` | `amqp://guest:guest@rabbitmq:5672` | coordinator, pool, worker, shared/amqp | Conexión RabbitMQ |
-| `REDIS_URL` | `redis://redis:6379` | coordinator/redis, coordinator/leader-election | Conexión Redis |
-| `BLOCK_THRESHOLD` | `1` | pool/index.js | Txs para gatillar minería |
-| `DIFFICULTY` | `0000` | coordinator, pool | Dificultad PoW (ceros iniciales) |
-| `KEEPALIVE_INTERVAL_MS` | `10000` | worker/index.js | Intervalo de heartbeat (ms) |
-| `WORKER_TTL_MS` | `30000` | pool/index.js | TTL del registro de workers |
-| `PORT_COORDINATOR` | `3000` | coordinator | Puerto HTTP |
-| `PORT_POOL` | `3001` | pool | Puerto HTTP |
-| `PORT_WORKER` | `3002` | worker | Puerto HTTP |
-| `PORT_VALIDATOR` | `3003` | validator | Puerto HTTP |
-| `PILAR1_CPU_BINARY` | `./tpi/pilar1/Hit7/CPU/pow_cpu_range.js` | worker/miner.js | Ruta minero CPU |
-| `PILAR1_GPU_BINARY` | `./tpi/pilar1/Hit7/GPU/pow_gpu_range` | worker/miner.js | Ruta minero GPU |
-| `COORDINATOR_URL` | `http://coordinator:3000` | pool | URL del Coordinator |
-| `POOL_URL` | `http://pool:3001` | coordinator | URL del Pool |
-| `WORKER_TYPE` | `CPU` | worker/consumer, worker/miner | Tipo de worker |
-| `WORKER_ID` | UUID auto | worker/consumer | ID único del worker |
-| `COORDINATOR_ID` | hash(hostname) | coordinator/leader-election | ID para elección Bully |
-| `JWT_SECRET` | `pilar2-dev-secret` | coordinator | Secreto JWT |
-| `DB_PATH` | `./data/auth.db` | coordinator/db.js | Ruta SQLite |
-| `LOG_LEVEL` | `info` | shared/logger | Nivel de log |
-| `RABBITMQ_CA` | — | coordinator/rabbitmq | Cert CA TLS |
-| `RABBITMQ_CERT` | — | coordinator/rabbitmq | Cert cliente TLS |
-| `RABBITMQ_KEY` | — | coordinator/rabbitmq | Key cliente TLS |
+| `SERVICE` | *(requerida)* | entrypoint | `coordinator`, `pool`, `worker`, `validator` |
+| `RABBITMQ_URL` | `amqp://guest:guest@rabbitmq:5672` | todos | Conexión RabbitMQ |
+| `REDIS_URL` | `redis://redis:6379` | coordinator | Conexión Redis |
+| `DIFFICULTY` | `0000` | coordinator, pool | Prefijo PoW (ej: 4 ceros) |
+| `BLOCK_THRESHOLD` | `1` | pool | Txs para gatillar minería |
+| `WORKER_TTL_MS` | `30000` | pool | TTL del registry de workers |
+| `KEEPALIVE_INTERVAL_MS` | `10000` | worker | Heartbeat (ms) |
+| `WORKER_TYPE` | `CPU` | worker | `CPU` o `GPU` |
+| `COORDINATOR_ID` | hash(hostname) | coordinator | ID para elección Bully |
+| `JWT_SECRET` | `pilar2-dev-secret` | coordinator | Secreto para firmar JWT |
+| `DB_PATH` | `./data/auth.db` | coordinator | Ruta SQLite |
+| `PILAR1_CPU_BINARY` | `./tpi/.../pow_cpu_range.js` | worker/miner | Ruta minero CPU |
+| `PILAR1_GPU_BINARY` | `./tpi/.../pow_gpu_range` | worker/miner | Ruta minero GPU |
+| `LOG_LEVEL` | `info` | todos | Nivel de log (pino) |
 
 ---
 
-## 16. Diagrama de Arquitectura Completo
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        PILAR 2 — ARQUITECTURA COMPLETA                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-USUARIOS / CLIENTES
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  ┌─────────────┐  ┌───────────────┐  ┌─────────────┐                       │
-│  │   Frontend   │  │  Stress Test  │  │   Curl /    │                       │
-│  │  React+Vite  │  │   script.js   │  │ Postman /   │                       │
-│  │  :8080 (dev) │  │               │  │ scripts/    │                       │
-│  └──────┬───────┘  └───────┬───────┘  └──────┬──────┘                       │
-│         │                  │                  │                              │
-│         ├──────────┬───────┴──────────────────┘                              │
-│         │          │           POST /transaction                             │
-└─────────┼──────────┼────────────────────────────────────────────────────────┘
-          │          │
-          ▼          ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                            POOL (Express :3001)                              │
-│                                                                              │
-│  ┌─────────────┐  ┌──────────────────────┐  ┌────────────────────────────┐  │
-│  │ validateTx() │  │   checkCustody()      │  │   transaction-pool.js     │  │
-│  │ (schema +    │  │   ├─ pool.findByLot() │  │   (buffer en memoria)     │  │
-│  │  Ed25519)    │  │   └─ GET /chain/lot/  │  │                           │  │
-│  └──────┬───────┘  └──────────────────────┘  │   flush() cuando >=        │  │
-│         │                                     │   BLOCK_THRESHOLD          │  │
-│         └───────────┬─────────────────────────┘                           │  │
-│                     │                                                     │  │
-│                     ▼                                                     │  │
-│           ┌───────────────────┐                                          │  │
-│           │  triggerMining()  │────────────► POST /mine ──► Coordinator   │  │
-│           │  (si no in-prog)  │  (HTTP)                                  │  │
-│           └────────┬──────────┘                                          │  │
-│                    │ fallback: publica directo                            │  │
-│                    ▼                                                      │  │
-│              rabbitmq.sendToQueue('mining_tasks', task)                   │  │
-│                                                                              │
-│  ┌─────────────────────────────────────────┐                                │
-│  │ worker-registry.js                       │    ◄──── keepalive queue       │
-│  │ Map<worker_id, {type, lastSeen}>         │       (TTL 30s)                │
-│  │ auto-evict: Date.now() - lastSeen > TTL  │                               │
-│  └─────────────────────────────────────────┘                                │
-│                                                                              │
-│  Suscripciones:                                                              │
-│  ◄── block_confirmed (fanout) → _miningInProgress = false                   │
-│  ◄── keepalive → registry.register(worker_id, type)                         │
-└──────────────────────────────────────────────────────────────────────────────┘
-         │                           ▲
-         │ publica mining_tasks      │ escucha keepalive
-         ▼                           │
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                      RABBITMQ (AMQP 0-9-1)                                   │
-│                                                                              │
-│  ┌────────────────┐  ┌──────────────────┐  ┌───────────────┐  ┌───────────┐  │
-│  │  mining_tasks  │  │  mining_results  │  │   keepalive   │  │scale_req  │  │
-│  │  (durable,     │  │  (DLX→dlx_mining │  │ (TTL 30s, no  │  │(durable)  │  │
-│  │   prefetch=1)  │  │   → mining_res..)│  │   durable)    │  │           │  │
-│  └───────┬────────┘  └────────┬─────────┘  └───────┬───────┘  └───────────┘  │
-│          │                   │                     │                         │
-│          ▼                   ▼                     ▼                         │
-│  Consumidores:      Consumidor:            Consumidor:                       │
-│  Workers            Coordinator (líder)    Pool                              │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────────────┐    │
-│  │  block_confirmed (fanout exchange, no durable)                       │    │
-│  └────┬──────────────────────────────────────────────────────┬──────────┘    │
-│       │                                                      │               │
-│       ▼                                                      ▼               │
-│  Pool (sub exclusivo)                              Coordinators (sub exclus.) │
-└──────────────────────────────────────────────────────────────────────────────┘
-         │                    ▲                    ▲
-         │ consume            │ publica            │ publica
-         │ mining_tasks       │ mining_results     │ block_confirmed
-         ▼                    │                    │
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  WORKERS (CPU / GPU)                                                         │
-│                                                                              │
-│  ┌─────────────────────────────────────────────┐                            │
-│  │  worker/consumer.js                          │                            │
-│  │  ● prefetch(1) → 1 tarea a la vez            │                            │
-│  │  ● startConsuming(RABBITMQ_URL)              │                            │
-│  │  ● publica resultado en mining_results        │                            │
-│  └───────────────────┬──────────────────────────┘                            │
-│                      │                                                       │
-│                      ▼                                                       │
-│  ┌─────────────────────────────────────────────┐                            │
-│  │  worker/miner.js                             │                            │
-│  │                                              │                            │
-│  │  CPU (WORKER_TYPE='CPU'):                    │                            │
-│  │    node pow_cpu_range.js                     │                            │
-│  │      <payload> <difficulty> <start> <end>    │                            │
-│  │                                              │                            │
-│  │  GPU (WORKER_TYPE='GPU'):                    │                            │
-│  │    ./pow_gpu_range                           │                            │
-│  │      <payload> <difficulty> <start> <end>    │                            │
-│  │    (sm_61, GTX 1050, CUDA 12.2)              │                            │
-│  └─────────────────────────────────────────────┘                            │
-│                                                                              │
-│  Keepalive: cada 10s → PUBLICAR en cola 'keepalive'                          │
-│  HTTP: /worker/status (puerto 3002)                                          │
-└──────────────────────────────────────────────────────────────────────────────┘
-         ▲                                        ▲
-         │ Verifica custodia                      │ POST /mine
-         │                                        │ (cuando pool gatilla)
-         │                                        │
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  COORDINATOR (Express :3000) — Con tolerancia a fallos Bully                 │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────┐            │
-│  │  LÍDER                                                       │            │
-│  │  ┌──────────────┐  ┌───────────┐  ┌──────────────────────┐  │            │
-│  │  │ consumeResults│  │handleRes.│  │  storeBlock()        │  │            │
-│  │  │ (mining_results) │  │NCT.2-4│  │  HSET block:<hash>   │  │            │
-│  │  │              │  │          │  │  RPUSH chain          │  │            │
-│  │  └──────────────┘  └──────────┘  └──────────────────────┘  │            │
-│  │                                                              │            │
-│  │  ┌────────────────┐  ┌───────────────────────────────────┐  │            │
-│  │  │ publishBlockConf.│  │ consumeDLQ (mining_results_dlq)   │  │            │
-│  │  └────────────────┘  └───────────────────────────────────┘  │            │
-│  └──────────────────────────────────────────────────────────────┘            │
-│                                                                              │
-│  ┌──────────────────────────────────────────────────────────────┐            │
-│  │  FOLLOWER                                                    │            │
-│  │  ● Poll leader:coordinator cada 5s                           │            │
-│  │  ● NO consume mining_results                                 │            │
-│  │  ● Recibe block_confirmed (fanout) por consistencia           │            │
-│  └──────────────────────────────────────────────────────────────┘            │
-│                                                                              │
-│  ┌──────────────────────────────────────────────┐                           │
-│  │  LeaderElection (Bully)                       │                           │
-│  │  ● ID = COORDINATOR_ID o hash(hostname)      │                           │
-│  │  ● Redis Pub/Sub: election:start/answer/victory│                           │
-│  │  ● SET leader:coordinator <id> EX 15          │                           │
-│  │  ● Heartbeat cada 5s                          │                           │
-│  │  ● Poll follower cada 5s                      │                           │
-│  └──────────────────────────────────────────────┘                           │
-│                                                                              │
-│  ┌─────────────────────────────────────────────┐                            │
-│  │  db.js (SQLite)                              │                            │
-│  │  entities(id, name, display_name,            │                            │
-│  │           password_hash, public_key,         │                            │
-│  │           private_key)                       │                            │
-│  └─────────────────────────────────────────────┘                            │
-│                                                                              │
-│  Endpoints: /status, /chain, /chain/:hash, /chain/lot/:lotId, /entities     │
-│            /sign (JWT), /auth/login, /auth/me, /mine                         │
-└──────────────────────────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  REDIS                                                                       │
-│                                                                              │
-│  block:<hash> ───► Hash (previous_hash, nonce, timestamp, transactions,     │
-│  │                    block_hash)                                            │
-│  │                                                                           │
-│  chain ───► List de hashes ordenados                                        │
-│  │                                                                           │
-│  leader:coordinator ───► String (EX 15s) — líder actual                      │
-│  │                                                                           │
-│  lock:<prevHash> ───► String (NX EX 30s) — lock atómico de commit           │
-│                                                                              │
-│  Persistencia: AOF (redis-server --appendonly yes)                           │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-────────────────────────────────────────────────────────────────────────────────
-                    GPU EXTERNO (k3s cluster, namespace: g-amarillo)
-
-  GKE ───RabbitMQ LB ──► GPU Worker Pod ──► mining_results (vía WAN)
-        35.202.170.91                │
-                                     ▼
-                               pow_gpu_range.cu
-                               (CUDA, sm_61, GTX 1050)
-────────────────────────────────────────────────────────────────────────────────
-                    DNS / TLS
-
-  custody-chain.darwin-consulting.online
-  ├── Hostinger → A record → Ingress Controller LB IP
-  ├── cert-manager → Let's Encrypt (renovación automática)
-  └── Nginx Ingress → Frontend (puerto 80)
-────────────────────────────────────────────────────────────────────────────────
-                    AUTENTICACIÓN
-
-  Usuario → POST /auth/login → JWT (24h)
-         → POST /sign [JWT Bearer] → transacción firmada
-         → POST /transaction (Pool) → validateTransaction(tx)
-         → firma Ed25519 vs publicKey(origen)  (o __unsigned__ para testing)
-────────────────────────────────────────────────────────────────────────────────
-                    BLOQUE GÉNESIS
-
-  {
-    previous_hash: "00000000000000000000000000000000",
-    nonce: "0",
-    timestamp: "<startup_time>",
-    transactions: [],
-    block_hash: md5("genesis")  // = "000048980b98addc5dbd60dc56ccceb6"
-  }
-────────────────────────────────────────────────────────────────────────────────
-```
-
----
-
-## Apéndice: Resumen de Patrones de Diseño Distribuido
-
-| Problema | Solución en Pilar 2 |
-|---|---|
-| Comunicación asíncrona | RabbitMQ AMQP con colas durables y ACK explícito |
-| Distribución de carga | Work Queue con prefetch(1) en mining_tasks |
-| Elección de líder | Algoritmo Bully sobre Redis Pub/Sub |
-| Exclusión mutua distribuida | SET NX EX (Redis lock) por bloque |
-| Notificación 1:N | Fanout exchange block_confirmed |
-| Liveness detection | Keepalive queue con TTL + registry eviction |
-| Dead letters / fallos | DLX + DLQ para resultados fallidos |
-| Reintentos con backoff | Retry exponencial para handlers críticos |
-| Servicio vs microservicio | Entrypoint único (monolito modular) por SERVICE env |
-| Auto-escalado | HPA por CPU en Kubernetes |
-| GPU remota | Worker conectado vía WAN a RabbitMQ central |
-| Autenticación | JWT con bcrypt + Ed25519 (firma de transacciones) |
-| Persistencia de estado | Redis (blockchain) + SQLite (auth) |
-| PoW no interactivo | MD5(payload + nonce).startsWith(difficulty) |
+> **Documentación generada para el TP Integrador — Sistemas Distribuidos y Programación Paralela 2026**  
+> **UNLu — Departamento de Ciencias Básicas — Dr. David Petrocelli**
