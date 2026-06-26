@@ -45,8 +45,9 @@ async function sendKeepalive(channel) {
 async function start() {
   const rabbitmqUrl = process.env.RABBITMQ_URL;
 
-  // Start consuming mining tasks
-  await startConsuming(rabbitmqUrl);
+  // Start consuming mining tasks — keep handles for graceful shutdown
+  const { channel: consumerChannel, connection: consumerConn, consumerTag } =
+    await startConsuming(rabbitmqUrl);
 
   // Keepalive loop — separate channel so the consumer channel isn't shared
   const { channel: keepaliveChannel } = await createChannel(rabbitmqUrl);
@@ -63,9 +64,26 @@ async function start() {
   );
 
   const port = parseInt(process.env.PORT_WORKER || '3002', 10);
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     logger.info({ workerId: WORKER_ID }, 'HTTP status on port %d', port);
   });
+
+  // Graceful shutdown: cancel consumer and close connection so RabbitMQ
+  // requeues any in-flight unacked message back to mining_tasks.
+  async function shutdown(signal) {
+    logger.info({ signal, workerId: WORKER_ID }, 'Shutting down worker');
+    server.close();
+    try {
+      await consumerChannel.cancel(consumerTag);
+      await consumerConn.close();
+    } catch (err) {
+      logger.warn({ err: err.message }, 'Error during AMQP shutdown');
+    }
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch((err) => {

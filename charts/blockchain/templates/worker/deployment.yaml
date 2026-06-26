@@ -3,7 +3,9 @@ kind: Deployment
 metadata:
   name: {{ include "blockchain.fullname" . }}-worker
 spec:
-  replicas: 2
+  {{- if not .Values.worker.hpa.enabled }}
+  replicas: {{ .Values.worker.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app: worker
@@ -24,6 +26,8 @@ spec:
               value: "amqp://guest:guest@rabbitmq:5672"
           ports:
             - containerPort: 3002
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
           livenessProbe:
             tcpSocket:
               port: 3002

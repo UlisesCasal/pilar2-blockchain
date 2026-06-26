@@ -21,7 +21,7 @@ const WORKER_TYPE = process.env.WORKER_TYPE || 'CPU';
  * @returns {Promise<void>}
  */
 async function startConsuming(rabbitmqUrl) {
-  const { channel } = await createChannel(rabbitmqUrl);
+  const { channel, connection } = await createChannel(rabbitmqUrl);
 
   await channel.assertQueue('mining_tasks', { durable: true });
   await channel.assertQueue('mining_results', {
@@ -30,7 +30,7 @@ async function startConsuming(rabbitmqUrl) {
   });
   await channel.prefetch(1);
 
-  channel.consume(
+  const { consumerTag } = await channel.consume(
     'mining_tasks',
     async (msg) => {
       if (!msg) return;
@@ -78,6 +78,7 @@ async function startConsuming(rabbitmqUrl) {
   );
 
   logger.info({ workerId: WORKER_ID, type: WORKER_TYPE }, 'Consuming mining_tasks');
+  return { channel, connection, consumerTag };
 }
 
 module.exports = { startConsuming, WORKER_ID, WORKER_TYPE };

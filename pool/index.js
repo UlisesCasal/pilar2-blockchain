@@ -282,7 +282,14 @@ async function start() {
         try {
           const hb = JSON.parse(msg.content.toString());
           if (hb.worker_id) {
+            const wasEmpty = registry.count() === 0;
             registry.register(hb.worker_id, hb.type || 'CPU');
+            if (wasEmpty && pool.size() > 0) {
+              const batch = pool.flush();
+              triggerMining(batch).catch((err) =>
+                logger.error({ err: err.message }, 'Failed to trigger mining on worker reconnect')
+              );
+            }
           }
         } catch (_) {
           // Malformed keepalive — ignore
