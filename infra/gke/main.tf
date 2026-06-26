@@ -1,3 +1,10 @@
+# Static IP reservada para el Ingress Controller (dominio custody-chain.darwin-consulting.online)
+# Creada manualmente, la importamos al estado de tofu para gestionarla:
+# tofu import google_compute_address.blockchain_ingress blockchain-ingress-ip
+data "google_compute_address" "blockchain_ingress" {
+  name = "blockchain-ingress-ip"
+}
+
 resource "google_container_cluster" "primary" {
   name     = "blockchain-cluster"
   location = "us-central1-a"

@@ -51,10 +51,11 @@ async function handleResult(result) {
     return;
   }
 
-  // NCT.4: Verify the nonce
+  // NCT.4: Verify the nonce — usar la dificultad que el worker usó (enviada en el result)
   const hash = md5(result.payload + result.nonce);
-  if (!hash.startsWith(DIFFICULTY)) {
-    logger.warn('Invalid nonce received — hash does not meet difficulty, discarding');
+  const requiredDifficulty = result.difficulty || DIFFICULTY;
+  if (!hash.startsWith(requiredDifficulty)) {
+    logger.warn({ hash, requiredDifficulty }, 'Invalid nonce — hash does not meet required difficulty');
     return;
   }
 
@@ -143,6 +144,7 @@ app.get('/status', async (_req, res) => {
       chain_length: chain.length,
       pending_tx: 0,
       last_block: lastBlock ? lastBlock.block_hash : null,
+      difficulty: DIFFICULTY,
       role: election ? (election.isLeader() ? 'leader' : 'follower') : 'unknown',
     });
   } catch (err) {

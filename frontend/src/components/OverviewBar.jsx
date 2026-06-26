@@ -80,7 +80,7 @@ export default function OverviewBar({ role }) {
         ))}
         <div className="px-5">
           <a
-            href={import.meta.env.VITE_RABBITMQ_DASHBOARD_URL}
+            href={import.meta.env.VITE_RABBITMQ_DASHBOARD_URL || 'http://localhost:15672'}
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs uppercase tracking-widest text-text-muted hover:text-white transition-colors"

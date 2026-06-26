@@ -54,6 +54,7 @@ async function startConsuming(rabbitmqUrl) {
           hash: mineResult.hash || null,
           payload: task.payload,
           prev_hash: task.prev_hash,
+          difficulty: task.difficulty,
           transactions: task.transactions,
         };
       } catch (err) {

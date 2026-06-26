@@ -37,6 +37,8 @@ const registry = makeRegistry({ ttlMs: WORKER_TTL_MS });
 
 let _channel = null;
 let lastScaleRequest = null;
+let _miningInProgress = false;
+let _pendingBlockBatch = null;
 
 async function getChannel() {
   if (!_channel) {
@@ -73,9 +75,6 @@ async function triggerMining(transactions) {
 
   const activeWorkers = registry.count();
   const workerCount = Math.max(1, activeWorkers);
-  const effectiveDifficulty = activeWorkers === 0
-    ? DIFFICULTY.slice(0, Math.max(1, DIFFICULTY.length - 1))
-    : DIFFICULTY;
 
   if (activeWorkers === 0) {
     const scaleRequest = {
@@ -102,7 +101,7 @@ async function triggerMining(transactions) {
       task_id: uuidv4(),
       payload,
       prev_hash: prevHash,
-      difficulty: effectiveDifficulty,
+      difficulty: DIFFICULTY,
       nonce_start: range.start,
       nonce_end: range.end,
       transactions,
@@ -177,13 +176,16 @@ app.post('/transaction', async (req, res) => {
   let miningTriggered = false;
 
   // Threshold check — flush and trigger mining atomically
-  if (pool.size() >= BLOCK_THRESHOLD) {
+  // Skip si ya hay una minería en curso (evita tareas redundantes con el mismo prevHash)
+  if (!_miningInProgress && pool.size() >= BLOCK_THRESHOLD) {
     const batch = pool.flush();
+    _miningInProgress = true;
     try {
       await triggerMining(batch);
       miningTriggered = true;
     } catch (err) {
       logger.error({ err: err.message }, 'Failed to trigger mining');
+      _miningInProgress = false;
       // Re-add transactions back to pool on failure
       for (const t of batch) pool.add(t);
       return res.status(500).json({ error: 'Failed to trigger mining', details: [err.message] });
@@ -303,6 +305,15 @@ async function start() {
       const { subscribeBlockConfirmed } = require('../shared/amqp');
       await subscribeBlockConfirmed(RABBITMQ_URL, (block) => {
         logger.info('Block confirmed: %s', block.block_hash);
+        _miningInProgress = false;
+        // Si quedaron transacciones pendientes en el pool, disparar minería
+        if (pool.size() >= BLOCK_THRESHOLD) {
+          const batch = pool.flush();
+          _miningInProgress = true;
+          triggerMining(batch).catch((err) =>
+            logger.error({ err: err.message }, 'Failed to trigger mining after block confirmation')
+          );
+        }
       });
     } catch (err) {
       logger.warn({ err: err.message }, 'Could not subscribe to block confirmations');
